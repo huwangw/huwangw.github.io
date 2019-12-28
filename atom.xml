@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Mr Hu</title>
+  
+  <subtitle>huwangw</subtitle>
+  <link href="/atom.xml" rel="self"/>
+  
+  <link href="https://github.com/huwangw/huwangw.github.io/"/>
+  <updated>2019-12-22T10:41:20.535Z</updated>
+  <id>https://github.com/huwangw/huwangw.github.io/</id>
+  
+  <author>
+    <name>huwangw</name>
+    
+  </author>
+  
+  <generator uri="http://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>This is HuWang first Blog</title>
+    <link href="https://github.com/huwangw/huwangw.github.io/2019/12/22/this-is-huwang-first-blog/"/>
+    <id>https://github.com/huwangw/huwangw.github.io/2019/12/22/this-is-huwang-first-blog/</id>
+    <published>2019-12-22T10:35:13.000Z</published>
+    <updated>2019-12-22T10:41:20.535Z</updated>
+    
+    <summary type="html">
+    
+      
+      
+        
+        
+          &lt;p&gt;#你好， 开始你的博客之旅吧&lt;br&gt;&lt;code&gt;Console.WriteLine(&amp;quot;This is the Hello Word Blog,{0} start you
+        
+      
+    
+    </summary>
+    
+    
+  </entry>
+  
+</feed>
