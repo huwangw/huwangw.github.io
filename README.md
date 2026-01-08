@@ -41,3 +41,74 @@ private void addListValidation(DataValidationCollection validations,
     validation.setInCellDropdown(true); // 显示下拉箭头
 }
 
+
+
+
+
+import com.aspose.cells.*;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class DataValidationUtil {
+
+    /**
+     * 获取指定范围内的所有数据验证规则
+     * @param worksheet 要搜索的工作表
+     * @param targetRange 目标范围 (例如: A10:D1000)
+     * @return 包含规则及其在范围内具体位置的列表
+     */
+    public static List<ValidationInfo> getValidationsInRange(Worksheet worksheet, Range targetRange) {
+        List<ValidationInfo> result = new ArrayList<>();
+        DataValidationCollection validations = worksheet.getValidations();
+
+        // 获取目标范围的行列边界
+        int tgtRowStart = targetRange.getFirstRow();
+        int tgtRowEnd = targetRange.getFirstRow() + targetRange.getRowCount() - 1;
+        int tgtColStart = targetRange.getFirstColumn();
+        int tgtColEnd = targetRange.getFirstColumn() + targetRange.getColumnCount() - 1;
+
+        // 遍历工作表上所有的数据验证规则
+        for (int i = 0; i < validations.getCount(); i++) {
+            DataValidation validation = validations.get(i);
+            CellArea area = validation.getArea();
+
+            // 检查该规则的区域是否与目标范围有重叠 (Intersect)
+            if (isIntersect(area, tgtRowStart, tgtRowEnd, tgtColStart, tgtColEnd)) {
+                // 创建一个包含规则和重叠区域信息的对象
+                ValidationInfo info = new ValidationInfo();
+                info.validation = validation;
+                info.appliedArea = area; // 原始应用区域
+                // 计算实际在目标范围内的区域 (可选，用于精确重建)
+                info.effectiveArea = calculateIntersection(area, tgtRowStart, tgtRowEnd, tgtColStart, tgtColEnd);
+                result.add(info);
+            }
+        }
+        return result;
+    }
+
+    // 检查两个区域是否有交集
+    private static boolean isIntersect(CellArea area, int r1, int r2, int c1, int c2) {
+        return !(area.EndRow < r1 || area.StartRow > r2 || area.EndColumn < c1 || area.StartColumn > c2);
+    }
+
+    // 计算交集区域
+    private static CellArea calculateIntersection(CellArea area, int r1, int r2, int c1, int c2) {
+        CellArea intersection = new CellArea();
+        intersection.StartRow = Math.max(area.StartRow, r1);
+        intersection.EndRow = Math.min(area.EndRow, r2);
+        intersection.StartColumn = Math.max(area.StartColumn, c1);
+        intersection.EndColumn = Math.min(area.EndColumn, c2);
+        return intersection;
+    }
+
+    // 包装类：用于存储验证规则及其在特定范围内的信息
+    public static class ValidationInfo {
+        public DataValidation validation;
+        public CellArea appliedArea;   // 规则原本应用的区域
+        public CellArea effectiveArea; // 规则在目标范围内的实际生效区域
+    }
+}
+
+
+
