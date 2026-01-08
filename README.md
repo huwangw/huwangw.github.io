@@ -112,3 +112,36 @@ public class DataValidationUtil {
 
 
 
+
+
+// 1. 定义你复制的目标范围
+Range targetRange = worksheet.getCells().createRange("A10:C5000");
+
+// 2. 获取该范围内的所有验证规则
+List<DataValidationUtil.ValidationInfo> validations = DataValidationUtil.getValidationsInRange(worksheet, targetRange);
+
+// 3. 清除旧的（解决报错的关键）
+worksheet.getValidations().clear(10, 0, 4991, 3); // 清除目标区域旧数据
+
+// 4. 重新创建
+for (DataValidationUtil.ValidationInfo info : validations) {
+    DataValidation newDV = worksheet.getValidations().add();
+    
+    // 复用原有的公式 (如 "=NamedRange")
+    newDV.setFormula1(info.validation.getFormula1());
+    newDV.setFormula2(info.validation.getFormula2());
+    newDV.setType(info.validation.getType());
+    // ... 复制其他属性 ...
+
+    // 设置新的区域（注意：这里可以只设置该列，或者设置具体的交集）
+    CellArea newArea = new CellArea();
+    newArea.StartRow = 10;
+    newArea.EndRow = 5000;
+    newArea.StartColumn = info.effectiveArea.StartColumn; // 获取到的列
+    newArea.EndColumn = info.effectiveArea.EndColumn;
+    newDV.setArea(newArea);
+}
+
+
+
+
