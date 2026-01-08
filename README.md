@@ -1,4 +1,4 @@
-import com.aspose.cells.*;
+3import com.aspose.cells.*;
 
 public void setupColumnDataValidations(Worksheet worksheet, int startRow, int endRow) {
     DataValidationCollection validations = worksheet.getValidations();
@@ -141,6 +141,113 @@ for (DataValidationUtil.ValidationInfo info : validations) {
     newArea.EndColumn = info.effectiveArea.EndColumn;
     newDV.setArea(newArea);
 }
+
+
+
+
+
+
+
+import com.aspose.cells.*;
+
+import java.util.*;
+
+public class TemplateValidationAnalyzer {
+
+    // 用于存储分析结果的内部类
+    public static class ColumnValidationRule {
+        public int columnIndex;
+        public String columnName;
+        public String validationType;
+        public String formula1;
+        public String formula2; // 用于介于、大于等于等双值条件
+        public String operator;
+
+        @Override
+        public String toString() {
+            return String.format("列: %s (Index: %d), 类型: %s, 操作符: %s, 公式1: %s, 公式2: %s",
+                    columnName, columnIndex, validationType, operator, formula1, formula2);
+        }
+    }
+
+    /**
+     * 分析指定工作表，获取所有使用了数据验证的列及其规则
+     * @param worksheet 模板工作表
+     * @return 包含列验证规则的列表
+     */
+    public static List<ColumnValidationRule> analyzeValidationsInSheet(Worksheet worksheet) {
+        List<ColumnValidationRule> result = new ArrayList<>();
+        ValidationCollection validations = worksheet.getValidations();
+
+        // 遍历工作表上所有的验证规则
+        for (int i = 0; i < validations.getCount(); i++) {
+            DataValidation validation = validations.get(i);
+            
+            // *** 关键：获取该规则应用的所有区域 ***
+            // 一个验证规则可能应用在不连续的多个区域上
+            CellArea[] areas = validation.getAreas();
+            if (areas == null) continue;
+
+            for (CellArea area : areas) {
+                // 遍历该区域内的每一列
+                // 这样可以确保如果一个规则覆盖了 A1:C10，我们能知道 A、B、C 三列都有这个规则
+                for (int colIdx = area.StartColumn; colIdx <= area.EndColumn; colIdx++) {
+                    ColumnValidationRule rule = new ColumnValidationRule();
+                    rule.columnIndex = colIdx;
+                    rule.columnName = worksheet.getCells().getColumnName(colIdx); // 将索引转为 A, B, AA 等
+                    rule.validationType = validation.getType().toString();
+                    rule.operator = validation.getOperator().toString();
+
+                    // 获取公式1 (通常是数据源或最小值)
+                    Object formulaObj1 = validation.getFormula1();
+                    rule.formula1 = (formulaObj1 != null) ? formulaObj1.toString() : "";
+
+                    // 获取公式2 (如果是 "介于" 或 "不介于" 等操作符)
+                    Object formulaObj2 = validation.getFormula2();
+                    rule.formula2 = (formulaObj2 != null) ? formulaObj2.toString() : "";
+
+                    result.add(rule);
+                }
+            }
+        }
+
+        // 可选：根据列索引去重，防止同一列被多个区域重复添加
+        // 如果你需要保留原始的区域信息则不需要去重
+        return removeDuplicates(result);
+    }
+
+    // 简单的去重方法，确保同一列只显示一次（取第一个遇到的规则）
+    private static List<ColumnValidationRule> removeDuplicates(List<ColumnValidationRule> list) {
+        Map<Integer, ColumnValidationRule> map = new LinkedHashMap<>();
+        for (ColumnValidationRule rule : list) {
+            // 如果该列还没有记录，则放入 map
+            if (!map.containsKey(rule.columnIndex)) {
+                map.put(rule.columnIndex, rule);
+            }
+        }
+        return new ArrayList<>(map.values());
+    }
+}
+
+
+
+
+
+
+
+// 加载模板
+Workbook workbook = new Workbook("template.xlsx");
+Worksheet templateSheet = workbook.getWorksheets().get(0); // 获取第一个Sheet
+
+// 调用分析方法
+List<TemplateValidationAnalyzer.ColumnValidationRule> rules = TemplateValidationAnalyzer.analyzeValidationsInSheet(templateSheet);
+
+// 打印结果
+System.out.println("模板中使用了数据验证的列：");
+for (TemplateValidationAnalyzer.ColumnValidationRule rule : rules) {
+    System.out.println(rule.toString());
+}
+
 
 
 
