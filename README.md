@@ -1,6 +1,6 @@
 3import com.aspose.cells.*;
 
-public void setupColumnDataValidations(Worksheet worksheet, int startRow, int endRow) {
+public void setupColumnDataValidations(Worksheet worksheet, int strtRow, it endRow) {
     DataValidationCollection validations = worksheet.getValidations();
     
     // 建议先清除目标区域旧的验证，防止冲突（这是解决你报错的关键）
@@ -118,26 +118,7 @@ public class DataValidationUtil {
 Range targetRange = worksheet.getCells().createRange("A10:C5000");
 
 // 2. 获取该范围内的所有验证规则
-List<DataValidationUtil.ValidationInfo> validations = DataValidationUtil.getValidationsInRange(worksheet, targetRange);
-
-// 3. 清除旧的（解决报错的关键）
-worksheet.getValidations().clear(10, 0, 4991, 3); // 清除目标区域旧数据
-
-// 4. 重新创建
-for (DataValidationUtil.ValidationInfo info : validations) {
-    DataValidation newDV = worksheet.getValidations().add();
-    
-    // 复用原有的公式 (如 "=NamedRange")
-    newDV.setFormula1(info.validation.getFormula1());
-    newDV.setFormula2(info.validation.getFormula2());
-    newDV.setType(info.validation.getType());
-    // ... 复制其他属性 ...
-
-    // 设置新的区域（注意：这里可以只设置该列，或者设置具体的交集）
-    CellArea newArea = new CellArea();
-    newArea.StartRow = 10;
-    newArea.EndRow = 5000;
-    newArea.StartColumn = info.effectiveArea.StartColumn; // 获取到的列
+List<DataValidationUectiveArea.StartColumn; // 获取到的列
     newArea.EndColumn = info.effectiveArea.EndColumn;
     newDV.setArea(newArea);
 }
@@ -184,71 +165,128 @@ public class TemplateValidationAnalyzer {
             DataValidation validation = validations.get(i);
             
             // *** 关键：获取该规则应用的所有区域 ***
-            // 一个验证规则可能应用在不连续的多个区域上
-            CellArea[] areas = validation.getAreas();
-            if (areas == null) continue;
+            // 一个验证规则可能应用在不连续
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            constst readline = require('readline');
 
-            for (CellArea area : areas) {
-                // 遍历该区域内的每一列
-                // 这样可以确保如果一个规则覆盖了 A1:C10，我们能知道 A、B、C 三列都有这个规则
-                for (int colIdx = area.StartColumn; colIdx <= area.EndColumn; colIdx++) {
-                    ColumnValidationRule rule = new ColumnValidationRule();
-                    rule.columnIndex = colIdx;
-                    rule.columnName = worksheet.getCells().getColumnName(colIdx); // 将索引转为 A, B, AA 等
-                    rule.validationType = validation.getType().toString();
-                    rule.operator = validation.getOperator().toString();
+/**
+ * 核心转换函数：将 LINQ 字符串解析为 SQL
+ * @param {string} linqQuery - 用户输入的 LINQ 语句
+ * @returns {string} - 生成的 SQL 语句
+ */
+function parseLinqToSql(linqQuery) {
+    // 1. 预处理：去除首尾空格，统一换行符
+    let query = linqQuery.trim().replace(/\r\n/g, ' ').replace(/\n/g, ' ');
 
-                    // 获取公式1 (通常是数据源或最小值)
-                    Object formulaObj1 = validation.getFormula1();
-                    rule.formula1 = (formulaObj1 != null) ? formulaObj1.toString() : "";
+    // --- 步骤 A: 解析 FROM 子句 ---
+    // 匹配模式: from [别名] in context.[表名]
+    // 例如: from re in context.MT
+    const fromRegex = /from\s+(\w+)\s+in\s+context\.(\w+)/i;
+    const fromMatch = query.match(fromRegex);
 
-                    // 获取公式2 (如果是 "介于" 或 "不介于" 等操作符)
-                    Object formulaObj2 = validation.getFormula2();
-                    rule.formula2 = (formulaObj2 != null) ? formulaObj2.toString() : "";
-
-                    result.add(rule);
-                }
-            }
-        }
-
-        // 可选：根据列索引去重，防止同一列被多个区域重复添加
-        // 如果你需要保留原始的区域信息则不需要去重
-        return removeDuplicates(result);
+    if (!fromMatch) {
+        return "❌ 错误：无法识别 'from' 语句。请确保格式为 'from 别名 in context.表名'";
     }
 
-    // 简单的去重方法，确保同一列只显示一次（取第一个遇到的规则）
-    private static List<ColumnValidationRule> removeDuplicates(List<ColumnValidationRule> list) {
-        Map<Integer, ColumnValidationRule> map = new LinkedHashMap<>();
-        for (ColumnValidationRule rule : list) {
-            // 如果该列还没有记录，则放入 map
-            if (!map.containsKey(rule.columnIndex)) {
-                map.put(rule.columnIndex, rule);
-            }
-        }
-        return new ArrayList<>(map.values());
+    const alias = fromMatch[1];      // 获取别名，例如 "re"
+    const tableName = fromMatch[2];  // 获取表名，例如 "MT"
+
+    // --- 步骤 B: 解析 WHERE 子句 ---
+    // 匹配模式: where [别名].[列名].equals([值])
+    // 注意：这里使用了动态构建的正则，因为别名是上一步解析出来的
+    // 例如: where re.CODE.equals(code)
+    const whereRegex = new RegExp(`where\\s+${alias}\\.(\\w+)\\.equals\$([^)]+)\$`, 'i');
+    const whereMatch = query.match(whereRegex);
+
+    let whereClause = "";
+    if (whereMatch) {
+        const columnName = whereMatch[1]; // 例如 "CODE"
+        const paramValue = whereMatch[2].trim(); // 例如 "code"
+        // 生成参数化查询占位符
+        whereClause = `WHERE [${columnName}] = @${paramValue}`;
     }
+
+    // --- 步骤 C: 解析 SELECT 子句 ---
+    // 匹配模式: select new [对象]{ [属性] = [别名].[列], ... }
+    // 例如: select new Md(){ Code= re.code, Name = re.name }
+    const selectRegex = new RegExp(`select\\s+new\\s+\\w+\\s*\$\\s*\$\\s*\\{([^}]+)\\}`, 'i');
+    const selectMatch = query.match(selectRegex);
+
+    let selectClause = "*"; // 默认查所有
+    if (selectMatch) {
+        const selectBody = selectMatch[1]; // 获取花括号内的内容
+        
+        // 使用正则查找所有 "别名.列名" 的模式
+        // 匹配结果如: ["re.code", "re.name"]
+        const columns = selectBody.match(new RegExp(`${alias}\\.(\\w+)`, 'g'));
+        
+        if (columns) {
+            // 提取列名并加上中括号 [Code], [Name]
+            const formattedCols = columns.map(col => {
+                const colName = col.split('.')[1];
+                return `[${colName}]`;
+            });
+            selectClause = formattedCols.join(', ');
+        }
+    }
+
+    // --- 步骤 D: 组装最终 SQL ---
+    let sql = `SELECT ${selectClause}\nFROM [${tableName}]`;
+    if (whereClause) {
+        sql += `\n${whereClause};`;
+    } else {
+        sql += `;`;
+    }
+
+    return sql;
 }
 
+// --- 命令行交互界面 ---
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
 
+console.log('------------------------------------------------');
+console.log('🚀  LINQ to SQL 转换工具 (Node.js 版)');
+console.log('💡  支持语法: from x in context.T where x.C.equals(v) select new O(){...}');
+console.log('输入 "exit" 或 "quit" 退出程序');
+console.log('------------------------------------------------');
 
+function startPrompt() {
+    rl.question('\n👉 请输入 LINQ 语句:\n> ', (input) => {
+        if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+            console.log('👋 再见！');
+            rl.close();
+            return;
+        }
 
+        try {
+            const result = parseLinqToSql(input);
+            console.log('\n✅ 生成的 SQL:');
+            console.log('------------------------------------------------');
+            console.log(result);
+            console.log('------------------------------------------------');
+        } catch (err) {
+            console.log('❌ 发生未知错误:', err);
+        }
 
-
-
-// 加载模板
-Workbook workbook = new Workbook("template.xlsx");
-Worksheet templateSheet = workbook.getWorksheets().get(0); // 获取第一个Sheet
-
-// 调用分析方法
-List<TemplateValidationAnalyzer.ColumnValidationRule> rules = TemplateValidationAnalyzer.analyzeValidationsInSheet(templateSheet);
-
-// 打印结果
-System.out.println("模板中使用了数据验证的列：");
-for (TemplateValidationAnalyzer.ColumnValidationRule rule : rules) {
-    System.out.println(rule.toString());
+        startPrompt(); // 循环继续询问
+    });
 }
 
-
-
+startPrompt();
 
 
