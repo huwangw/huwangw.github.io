@@ -1,4 +1,4 @@
-3import com.aspose.cells.*;
+83import com.aspose.cells.*;
 
 public void setupColumnDataValidations(Worksheet worksheet, int strtRow, it endRow) {
     DataValidationCollection validations = worksheet.getValidations();
@@ -287,6 +287,169 @@ function startPrompt() {
     });
 }
 
+startPrompt();
+
+
+
+
+
+
+
+
+
+const readline = require('readline');
+
+/**
+ * 终极版 LINQ 转 SQL 解析器
+ * 支持：From, Where, Join (Inner/Left), Select New, Null-Coalescing (??), Ternary (?:)
+ */
+function parseLinqToSql(linqQuery) {
+    // 1. 预处理：清洗字符串
+    let query = linqQuery.trim().replace(/\r\n/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ');
+
+    // --- 步骤 A: 解析 FROM 子句 ---
+    const fromRegex = /from\s+(\w+)\s+in\s+context\.(\w+)/i;
+    const fromMatch = query.match(fromRegex);
+    if (!fromMatch) return "❌ 错误：无法识别 'from' 语句。";
+    const mainAlias = fromMatch[1];
+    const mainTable = fromMatch[2];
+
+    // --- 步骤 B: 解析 JOIN 子句 ---
+    let joinClause = "";
+    
+    // Left Join (GroupJoin + DefaultIfEmpty)
+    const leftJoinRegex = /join\s+(\w+)\s+in\s+context\.(\w+)\s+on\s+(\w+)\.(\w+)\s+equals\s+(\w+)\.(\w+)\s+into\s+(\w+).*?from\s+(\w+)\s+in\s+\7\.DefaultIfEmpty$$/gi;
+    let match;
+    while ((match = leftJoinRegex.exec(query)) !== null) {
+        const jTable = match[2];
+        const leftA = match[3]; const leftC = match[4];
+        const rightA = match[5]; const rightC = match[6];
+        const finalAlias = match[8];
+        joinClause += `\nLEFT JOIN [${jTable}] AS [${finalAlias}] ON [${leftA}].[${leftC}] = [${rightA}].[${rightC}]`;
+    }
+
+    // Inner Join
+    const innerJoinRegex = /join\s+(\w+)\s+in\s+context\.(\w+)\s+on\s+(\w+)\.(\w+)\s+equals\s+(\w+)\.(\w+)(?!\s+into)/gi;
+    while ((match = innerJoinRegex.exec(query)) !== null) {
+        const jTable = match[2];
+        const leftA = match[3]; const leftC = match[4];
+        const rightA = match[5]; const rightC = match[6];
+        const jAlias = match[1];
+        joinClause += `\nINNER JOIN [${jTable}] AS [${jAlias}] ON [${leftA}].[${leftC}] = [${rightA}].[${rightC}]`;
+    }
+
+    // --- 步骤 C: 解析 WHERE 子句 ---
+    const whereStart = query.search(/where\s/i);
+    const selectStart = query.search(/select\s/i);
+    let whereClause = "";
+    if (whereStart !== -1 && selectStart !== -1) {
+        let whereBody = query.substring(whereStart + 6, selectStart).trim();
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\.equals$([^)]+)$/g, '[$1].[$2] = $3');
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*==\s*(\w+)\.(\w+)/g, '[$1].[$2] = [$3].[$4]');
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*==\s*([^=\s]+)/g, '[$1].[$2] = $3');
+        if (whereBody) whereClause = `WHERE ${whereBody}`;
+    }
+
+    // --- 步骤 D: 解析 SELECT 子句 (核心升级部分) ---
+    const selectRegex = /select\s+new\s+\w+\s*$\s*$\s*\{([^}]+)\}/i;
+    const selectMatch = query.match(selectRegex);
+    let selectClause = "*";
+
+    if (selectMatch) {
+        const selectBody = selectMatch[1];
+        const columns = [];
+        
+        // 正则匹配每一个字段定义，例如：Code = re.Code, 或 Name = t.Name ?? "Unknown"
+        // 这里我们按逗号分割，但要小心对象初始化中的逗号（这里简化处理，假设没有嵌套对象）
+        const fields = selectBody.split(',');
+
+        fields.forEach(field => {
+            field = field.trim();
+            if (!field) return;
+
+            // 1. 处理 ?? (空合并运算符)
+            // 匹配模式: Alias = Col ?? Value
+            const nullCoalesceMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)\s*\?\?\s*(.+)/);
+            if (nullCoalesceMatch) {
+                const colAlias = nullCoalesceMatch[1];
+                const tableAlias = nullCoalesceMatch[2];
+                const colName = nullCoalesceMatch[3];
+                let defaultVal = nullCoalesceMatch[4].trim();
+
+                // 处理默认值格式
+                if (defaultVal === 'string.Empty') defaultVal = "''";
+                else if (!isNaN(defaultVal)) defaultVal = defaultVal; // 数字
+                else if (defaultVal.startsWith('"') && defaultVal.endsWith('"')) defaultVal = `'${defaultVal.slice(1, -1)}'`; // 字符串字面量
+
+                columns.push(`ISNULL([${tableAlias}].[${colName}], ${defaultVal}) AS [${colAlias}]`);
+                return;
+            }
+
+            // 2. 处理三元运算符 ?:
+            // 匹配模式: Alias = Cond ? Val1 : Val2
+            const ternaryMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)\s*\?\s*(.+)\s*:\s*(.+)/);
+            if (ternaryMatch) {
+                const colAlias = ternaryMatch[1];
+                const tableAlias = ternaryMatch[2];
+                const colName = ternaryMatch[3];
+                const trueVal = ternaryMatch[4].trim();
+                const falseVal = ternaryMatch[5].trim();
+                
+                // 简单处理值
+                const formatVal = (v) => {
+                     if (v === 'true') return '1';
+                     if (v === 'false') return '0';
+                     if (v.startsWith('"')) return `'${v.slice(1, -1)}'`;
+                     return v;
+                };
+
+                columns.push(`CASE WHEN [${tableAlias}].[${colName}] = 1 THEN ${formatVal(trueVal)} ELSE ${formatVal(falseVal)} END AS [${colAlias}]`);
+                return;
+            }
+
+            // 3. 普通字段: Alias = Col
+            const simpleMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)/);
+            if (simpleMatch) {
+                const colAlias = simpleMatch[1];
+                const tableAlias = simpleMatch[2];
+                const colName = simpleMatch[3];
+                columns.push(`[${tableAlias}].[${colName}] AS [${colAlias}]`);
+            }
+        });
+
+        if (columns.length > 0) {
+            selectClause = columns.join(', ');
+        }
+    }
+
+    // --- 步骤 E: 组装 SQL ---
+    let sql = `SELECT ${selectClause}\nFROM [${mainTable}] AS [${mainAlias}]`;
+    if (joinClause) sql += joinClause;
+    if (whereClause) sql += `\n${whereClause};`;
+    else sql += `;`;
+
+    return sql;
+}
+
+// --- 命令行交互 ---
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+console.log('------------------------------------------------');
+console.log('🚀  LINQ to SQL 终极版 (支持 ?? 和 ?:)');
+console.log('------------------------------------------------');
+
+function startPrompt() {
+    rl.question('\n👉 请输入 LINQ 语句:\n> ', (input) => {
+        if (input.toLowerCase() === 'exit') { rl.close(); return; }
+        try {
+            const result = parseLinqToSql(input);
+            console.log('\n✅ 生成的 SQL:');
+            console.log('------------------------------------------------');
+            console.log(result);
+            console.log('------------------------------------------------');
+        } catch (err) { console.log('❌ 错误:', err); }
+        startPrompt();
+    });
+}
 startPrompt();
 
 
