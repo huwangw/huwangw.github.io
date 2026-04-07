@@ -453,3 +453,147 @@ function startPrompt() {
 startPrompt();
 
 
+
+
+
+
+const readline = require('readline');
+
+/**
+ * 最终版 LINQ 转 SQL 解析器
+ * 重点增强了 WHERE 子句的转换逻辑
+ */
+function parseLinqToSql(linqQuery) {
+    // 1. 预处理
+    let query = linqQuery.trim().replace(/\r\n/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ');
+
+    // --- 步骤 A: 解析 FROM ---
+    const fromRegex = /from\s+(\w+)\s+in\s+context\.(\w+)/i;
+    const fromMatch = query.match(fromRegex);
+    if (!fromMatch) return "❌ 错误：无法识别 'from' 语句。";
+    const mainAlias = fromMatch[1];
+    const mainTable = fromMatch[2];
+
+    // --- 步骤 B: 解析 JOIN ---
+    let joinClause = "";
+    // Left Join
+    const leftJoinRegex = /join\s+(\w+)\s+in\s+context\.(\w+)\s+on\s+(\w+)\.(\w+)\s+equals\s+(\w+)\.(\w+)\s+into\s+(\w+).*?from\s+(\w+)\s+in\s+\7\.DefaultIfEmpty$$/gi;
+    let match;
+    while ((match = leftJoinRegex.exec(query)) !== null) {
+        const jTable = match[2];
+        const finalAlias = match[8];
+        joinClause += `\nLEFT JOIN [${jTable}] AS [${finalAlias}] ON [${match[3]}].[${match[4]}] = [${match[5]}].[${match[6]}]`;
+    }
+    // Inner Join
+    const innerJoinRegex = /join\s+(\w+)\s+in\s+context\.(\w+)\s+on\s+(\w+)\.(\w+)\s+equals\s+(\w+)\.(\w+)(?!\s+into)/gi;
+    while ((match = innerJoinRegex.exec(query)) !== null) {
+        joinClause += `\nINNER JOIN [${match[2]}] AS [${match[1]}] ON [${match[3]}].[${match[4]}] = [${match[5]}].[${match[6]}]`;
+    }
+
+    // --- 步骤 C: 解析 WHERE (核心升级部分) ---
+    const whereStart = query.search(/where\s/i);
+    const selectStart = query.search(/select\s/i);
+    let whereClause = "";
+
+    if (whereStart !== -1 && selectStart !== -1) {
+        let whereBody = query.substring(whereStart + 6, selectStart).trim();
+
+        // 1. 处理 .Equals() 语法
+        // 匹配: x.Prop.Equals(val)
+        // 如果 val 是 null，转换为 IS NULL，否则转换为 =
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\.Equals$([^)]+)$/g, (fullMatch, alias, col, val) => {
+            val = val.trim();
+            if (val === 'null') {
+                return `[${alias}].[${col}] IS NULL`;
+            }
+            return `[${alias}].[${col}] = ${val}`;
+        });
+
+        // 2. 处理 == 和 != 语法
+        // 处理 == null
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*==\s*null/g, '[$1].[$2] IS NULL');
+        // 处理 != null 或 <> null
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*(!=|<>)\s*null/g, '[$1].[$2] IS NOT NULL');
+        // 处理普通 !=
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*!=\s*(\w+)\.(\w+)/g, '[$1].[$2] <> [$3].[$4]');
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*!=\s*(.+)/g, '[$1].[$2] <> $3');
+        
+        // 处理普通 == (非 null, 非对象比较)
+        // 这里做一个简单的假设：如果是 对象.属性 == 对象.属性，我们已经处理了。
+        // 如果是 对象.属性 == 变量，这里简单转换
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*==\s*(\w+)\.(\w+)/g, '[$1].[$2] = [$3].[$4]');
+        
+        // 3. 处理 .Contains() -> LIKE
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\.Contains$([^)]+)$/g, '[$1].[$2] LIKE '%' + $3 + '%'');
+
+        if (whereBody) whereClause = `WHERE ${whereBody}`;
+    }
+
+    // --- 步骤 D: 解析 SELECT ---
+    const selectRegex = /select\s+new\s+\w+\s*$\s*$\s*\{([^}]+)\}/i;
+    const selectMatch = query.match(selectRegex);
+    let selectClause = "*";
+
+    if (selectMatch) {
+        const selectBody = selectMatch[1];
+        const columns = [];
+        const fields = selectBody.split(',');
+
+        fields.forEach(field => {
+            field = field.trim();
+            if (!field) return;
+
+            // 处理 ??
+            const nullCoalesceMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)\s*\?\?\s*(.+)/);
+            if (nullCoalesceMatch) {
+                const colAlias = nullCoalesceMatch[1];
+                const tableAlias = nullCoalesceMatch[2];
+                const colName = nullCoalesceMatch[3];
+                let defaultVal = nullCoalesceMatch[4].trim();
+                if (defaultVal === 'string.Empty') defaultVal = "''";
+                else if (defaultVal.startsWith('"') && defaultVal.endsWith('"')) defaultVal = `'${defaultVal.slice(1, -1)}'`;
+                columns.push(`ISNULL([${tableAlias}].[${colName}], ${defaultVal}) AS [${colAlias}]`);
+                return;
+            }
+
+            // 普通字段
+            const simpleMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)/);
+            if (simpleMatch) {
+                columns.push(`[${simpleMatch[2]}].[${simpleMatch[3]}] AS [${simpleMatch[1]}]`);
+            }
+        });
+
+        if (columns.length > 0) selectClause = columns.join(', ');
+    }
+
+    // --- 步骤 E: 组装 ---
+    let sql = `SELECT ${selectClause}\nFROM [${mainTable}] AS [${mainAlias}]`;
+    if (joinClause) sql += joinClause;
+    if (whereClause) sql += `\n${whereClause};`;
+    else sql += `;`;
+
+    return sql;
+}
+
+// --- 命令行交互 ---
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+console.log('------------------------------------------------');
+console.log('🚀  LINQ to SQL 最终版 (完美支持 WHERE 语法)');
+console.log('------------------------------------------------');
+
+function startPrompt() {
+    rl.question('\n👉 请输入 LINQ 语句:\n> ', (input) => {
+        if (input.toLowerCase() === 'exit') { rl.close(); return; }
+        try {
+            const result = parseLinqToSql(input);
+            console.log('\n✅ 生成的 SQL:');
+            console.log('------------------------------------------------');
+            console.log(result);
+            console.log('------------------------------------------------');
+        } catch (err) { console.log('❌ 错误:', err); }
+        startPrompt();
+    });
+}
+startPrompt();
+
+
