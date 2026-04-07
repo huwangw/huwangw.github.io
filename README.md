@@ -597,3 +597,154 @@ function startPrompt() {
 startPrompt();
 
 
+const readline = require('readline');
+
+/**
+ * 混合连接修复版 LINQ 转 SQL 解析器
+ * 重点修复：同时存在 Inner Join 和 Left Join 时的解析错误
+ */
+
+// --- 辅助函数：智能转换 Equals 表达式 ---
+function convertEqualsExpression(match, alias, col, valueContent) {
+    let val = valueContent.trim();
+    if (val === 'null') return `[${alias}].[${col}] IS NULL`;
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        return `[${alias}].[${col}] = '${val.slice(1, -1)}'`;
+    }
+    if (!isNaN(val)) return `[${alias}].[${col}] = ${val}`;
+    return `[${alias}].[${col}] = @${val}`;
+}
+
+function parseLinqToSql(linqQuery) {
+    // 1. 预处理
+    let query = linqQuery.trim().replace(/\r\n/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ');
+
+    // --- 步骤 A: 解析 FROM ---
+    const fromRegex = /from\s+(\w+)\s+in\s+context\.(\w+)/i;
+    const fromMatch = query.match(fromRegex);
+    if (!fromMatch) return "❌ 错误：无法识别 'from' 语句。";
+    const mainAlias = fromMatch[1];
+    const mainTable = fromMatch[2];
+
+    // --- 步骤 B: 解析 JOIN (核心修复部分) ---
+    let joinClause = "";
+
+    // 1. 优先处理 LEFT JOIN (GroupJoin + DefaultIfEmpty)
+    // 逻辑：join ... into [组别名] ... from [新别名] in [组别名].DefaultIfEmpty()
+    const leftJoinRegex = /join\s+(\w+)\s+in\s+context\.(\w+)\s+on\s+(\w+)\.(\w+)\s+equals\s+(\w+)\.(\w+)\s+into\s+(\w+)\s+from\s+(\w+)\s+in\s+\7\.DefaultIfEmpty$$/gi;
+    
+    let match;
+    while ((match = leftJoinRegex.exec(query)) !== null) {
+        const jTable = match[2];      // 关联表名 (例如 M_F)
+        const leftA = match[3];       // 左表别名
+        const leftC = match[4];       // 左表列
+        const rightA = match[5];      // 右表别名 (原始)
+        const rightC = match[6];      // 右表列
+        // const groupAlias = match[7]; // 分组别名 (中间变量，SQL不需要)
+        const finalAlias = match[8];  // 最终展开的别名 (例如 fos)
+
+        joinClause += `\nLEFT JOIN [${jTable}] AS [${finalAlias}] ON [${leftA}].[${leftC}] = [${rightA}].[${rightC}]`;
+    }
+
+    // 2. 处理 INNER JOIN (标准 Join)
+    // 逻辑：join ... on ... equals ... (且后面不能紧跟 into)
+    // 注意：这里使用了负向预查 (?!\s+into) 来排除 Left Join 的情况
+    const innerJoinRegex = /join\s+(\w+)\s+in\s+context\.(\w+)\s+on\s+(\w+)\.(\w+)\s+equals\s+(\w+)\.(\w+)(?!\s+into)/gi;
+
+    while ((match = innerJoinRegex.exec(query)) !== null) {
+        const jTable = match[2];
+        const jAlias = match[1]; // Inner Join 直接用 join 后面的别名
+        const leftA = match[3];
+        const leftC = match[4];
+        const rightA = match[5];
+        const rightC = match[6];
+
+        joinClause += `\nINNER JOIN [${jTable}] AS [${jAlias}] ON [${leftA}].[${leftC}] = [${rightA}].[${rightC}]`;
+    }
+
+    // --- 步骤 C: 解析 WHERE ---
+    const whereStart = query.search(/where\s/i);
+    const selectStart = query.search(/select\s/i);
+    let whereClause = "";
+
+    if (whereStart !== -1 && selectStart !== -1) {
+        let whereBody = query.substring(whereStart + 6, selectStart).trim();
+        
+        // 处理 .Equals()
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\.Equals$([^)]+)$/g, convertEqualsExpression);
+        // 处理 == 和 !=
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*==\s*null/g, '[$1].[$2] IS NULL');
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*!=\s*null/g, '[$1].[$2] IS NOT NULL');
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*==\s*(\w+)/g, '[$1].[$2] = @$3');
+        whereBody = whereBody.replace(/(\w+)\.(\w+)\s*!=\s*(\w+)/g, '[$1].[$2] <> @$3');
+        
+        if (whereBody) whereClause = `WHERE ${whereBody}`;
+    }
+
+    // --- 步骤 D: 解析 SELECT ---
+    const selectRegex = /select\s+new\s+\w+\s*$\s*$\s*\{([^}]+)\}/i;
+    const selectMatch = query.match(selectRegex);
+    let selectClause = "*";
+
+    if (selectMatch) {
+        const selectBody = selectMatch[1];
+        const columns = [];
+        const fields = selectBody.split(',');
+
+        fields.forEach(field => {
+            field = field.trim();
+            if (!field) return;
+
+            // 处理 ??
+            const nullCoalesceMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)\s*\?\?\s*(.+)/);
+            if (nullCoalesceMatch) {
+                const colAlias = nullCoalesceMatch[1];
+                const tableAlias = nullCoalesceMatch[2];
+                const colName = nullCoalesceMatch[3];
+                let defaultVal = nullCoalesceMatch[4].trim();
+                if (defaultVal === 'string.Empty') defaultVal = "''";
+                else if (defaultVal.startsWith('"') && defaultVal.endsWith('"')) defaultVal = `'${defaultVal.slice(1, -1)}'`;
+                columns.push(`ISNULL([${tableAlias}].[${colName}], ${defaultVal}) AS [${colAlias}]`);
+                return;
+            }
+
+            // 普通字段
+            const simpleMatch = field.match(/(\w+)\s*=\s*(\w+)\.(\w+)/);
+            if (simpleMatch) {
+                columns.push(`[${simpleMatch[2]}].[${simpleMatch[3]}] AS [${simpleMatch[1]}]`);
+            }
+        });
+
+        if (columns.length > 0) selectClause = columns.join(', ');
+    }
+
+    // --- 步骤 E: 组装 ---
+    let sql = `SELECT ${selectClause}\nFROM [${mainTable}] AS [${mainAlias}]`;
+    if (joinClause) sql += joinClause;
+    if (whereClause) sql += `\n${whereClause};`;
+    else sql += `;`;
+
+    return sql;
+}
+
+// --- 命令行交互 ---
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+console.log('------------------------------------------------');
+console.log('🚀  LINQ to SQL 混合连接修复版');
+console.log('------------------------------------------------');
+
+function startPrompt() {
+    rl.question('\n👉 请输入 LINQ 语句:\n> ', (input) => {
+        if (input.toLowerCase() === 'exit') { rl.close(); return; }
+        try {
+            const result = parseLinqToSql(input);
+            console.log('\n✅ 生成的 SQL:');
+            console.log('------------------------------------------------');
+            console.log(result);
+            console.log('------------------------------------------------');
+        } catch (err) { console.log('❌ 错误:', err); }
+        startPrompt();
+    });
+}
+startPrompt();
+
