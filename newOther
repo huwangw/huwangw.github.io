@@ -1,0 +1,196 @@
+const XLSX = require('xlsx');
+const fs = require('fs');
+const path = require('path');
+
+// ====================== 配置 ======================
+const INPUT_FILE = './input.xlsx';    // 输入Excel
+const OUTPUT_FILE = './ddl_output.xlsx'; // 输出Excel
+// ==================================================
+
+main();
+
+async function main() {
+  if (!fs.existsSync(INPUT_FILE)) {
+    console.error('❌ 未找到输入文件：', INPUT_FILE);
+    return;
+  }
+
+  const workbook = XLSX.readFile(INPUT_FILE, {
+    cellStyles: true,
+    cellNF: false,
+    sheetStubs: true,
+  });
+
+  const outputWB = XLSX.utils.book_new();
+
+  for (const sheetName of workbook.SheetNames) {
+    console.log(`\n📄 处理 Sheet：${sheetName}`);
+    const ws = workbook.Sheets[sheetName];
+    const ddl = generateDDLFromSheet(ws, sheetName);
+
+    // 新建Sheet存放DDL
+    const outWs = XLSX.utils.aoa_to_sheet([
+      [`-- 表：${sheetName}`],
+      [ddl]
+    ]);
+    XLSX.utils.book_append_sheet(outputWB, outWs, sheetName);
+  }
+
+  XLSX.writeFile(outputWB, OUTPUT_FILE);
+  console.log('\n✅ DDL 生成完成！输出文件：', OUTPUT_FILE);
+}
+
+/**
+ * 从单个Sheet生成CREATE TABLE DDL
+ */
+function generateDDLFromSheet(ws, sheetName) {
+  const range = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
+  if (!range) return '-- 无数据';
+
+  // 1. 查找 tableID 合并单元格（任意位置）
+  let tableId = null;
+  let tableName = null;
+
+  // 遍历单元格找 tableID
+  for (let r = 0; r <= range.e.r; r++) {
+    for (let c = 0; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[addr];
+      if (!cell) continue;
+      const val = (cell.v + '').trim().toLowerCase();
+      if (val === 'tableid' || val === 'table id') {
+        tableId = cell.v;
+        // 表名在下一行
+        const nextR = r + 1;
+        const nameAddr = XLSX.utils.encode_cell({ r: nextR, c });
+        const nameCell = ws[nameAddr];
+        if (nameCell) tableName = (nameCell.v + '').trim();
+        break;
+      }
+    }
+    if (tableId) break;
+  }
+
+  if (!tableName) {
+    tableName = sheetName.replace(/\W/g, '_');
+    console.log('⚠️ 未找到表名，使用Sheet名作为表名');
+  }
+
+  // 2. 找到表头行：NO、物理名、data型、长度、主key、Not Null
+  let headerRow = -1;
+  let colMap = {}; // key: 字段名 → c
+
+  for (let r = 0; r <= range.e.r; r++) {
+    const row = getRow(ws, r);
+    const rowStr = row.join('').toLowerCase();
+    if (
+      rowStr.includes('no') &&
+      rowStr.includes('物理名') &&
+      rowStr.includes('data型') &&
+      rowStr.includes('长度') &&
+      rowStr.includes('主key') &&
+      rowStr.includes('not null')
+    ) {
+      headerRow = r;
+      row.forEach((val, c) => {
+        const k = (val + '').trim();
+        if (k === 'NO') colMap.NO = c;
+        if (k === '物理名') colMap.物理名 = c;
+        if (k === 'data型') colMap.data型 = c;
+        if (k === '长度') colMap.长度 = c;
+        if (k === '主key') colMap.主key = c;
+        if (k === 'Not Null' || k === 'NOT NULL' || k === 'NotNull') colMap.NotNull = c;
+      });
+      break;
+    }
+  }
+
+  if (headerRow === -1) {
+    return `-- ${sheetName}：未找到字段定义表头`;
+  }
+
+  // 3. 读取字段行
+  const fields = [];
+  const pkList = [];
+
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const row = getRow(ws, r);
+    const物理名 = (row[colMap.物理名] || '').trim();
+    if (!物理名) continue;
+
+    const data型 = (row[colMap.data型] || '').trim();
+    const 长度 = (row[colMap.长度] || '').trim();
+    const isPK = !!row[colMap.主key];
+    const isNN = !!row[colMap.NotNull];
+
+    // 生成SQL类型
+    const sqlType = getSqlType(data型, 长度);
+    const nullStr = isNN ? ' NOT NULL' : ' NULL';
+    const fieldLine = `    ${物理名} ${sqlType}${nullStr}`;
+
+    fields.push(fieldLine);
+    if (isPK) pkList.push(物理名);
+  }
+
+  // 4. 拼接DDL
+  let ddl = `CREATE TABLE [${tableName}] (\n`;
+  ddl += fields.join(',\n');
+
+  if (pkList.length > 0) {
+    ddl += `,\n    CONSTRAINT [PK_${tableName}] PRIMARY KEY CLUSTERED (${pkList.join(', ')})`;
+  }
+
+  ddl += `\n);`;
+  return ddl;
+}
+
+/**
+ * 获取一行所有单元格值
+ */
+function getRow(ws, r) {
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const row = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    row.push(ws[addr] ? ws[addr].v : '');
+  }
+  return row;
+}
+
+/**
+ * 根据 data型 + 长度 生成 SQL Server 类型
+ * 规则：长度为空 或 含 "-" → 数字类型
+ * 字符串自动加 COLLATE Japanese_CI_AS
+ */
+function getSqlType(dataType, len) {
+  const t = dataType.toLowerCase();
+  const lenStr = (len + '').trim();
+  const isNumberType = lenStr === '' || lenStr.includes('-');
+
+  // 数字类型
+  if (isNumberType) {
+    if (t.includes('int')) return 'INT';
+    if (t.includes('bigint')) return 'BIGINT';
+    if (t.includes('tinyint')) return 'TINYINT';
+    if (t.includes('smallint')) return 'SMALLINT';
+    if (t.includes('numeric') || t.includes('decimal')) return 'NUMERIC(18,2)';
+    if (t.includes('float')) return 'FLOAT';
+    if (t.includes('bit')) return 'BIT';
+    return 'INT';
+  }
+
+  // 字符串类型（带长度）
+  const length = parseInt(lenStr, 10) || 255;
+  if (t.includes('nchar')) {
+    return `NCHAR(${length}) COLLATE Japanese_CI_AS`;
+  }
+  if (t.includes('nvarchar')) {
+    return `NVARCHAR(${length}) COLLATE Japanese_CI_AS`;
+  }
+  if (t.includes('char')) {
+    return `CHAR(${length}) COLLATE Japanese_CI_AS`;
+  }
+  // 默认 varchar
+  return `VARCHAR(${length}) COLLATE Japanese_CI_AS`;
+}
+
