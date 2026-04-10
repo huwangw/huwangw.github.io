@@ -156,3 +156,216 @@ try {
     console.error('❌ 发生错误:', error);
 }
 
+
+const XLSX = require('xlsx');
+const fs = require('fs');
+const path = require('path');
+
+// --- 配置区域 ---
+const inputFile = path.resolve(__dirname, 'source.xlsx'); 
+const outputFile = path.resolve(__dirname, 'generated_ddl_jp.xlsx');
+
+/**
+ * 判断是否为字符类型字段
+ */
+function isCharacterType(type) {
+    if (!type) return false;
+    const t = String(type).toUpperCase();
+    return t.includes('CHAR') || t.includes('TEXT');
+}
+
+/**
+ * 预处理 Sheet 数据：处理合并单元格
+ */
+function preprocessSheet(sheet) {
+    const merges = sheet['!merges'];
+    if (!merges) return sheet;
+
+    merges.forEach(merge => {
+        const { s, e } = merge;
+        const topLeftCellAddress = XLSX.utils.encode_cell({ r: s.r, c: s.c });
+        const value = sheet[topLeftCellAddress] ? sheet[topLeftCellAddress].v : null;
+
+        if (value !== null && value !== undefined) {
+            for (let r = s.r; r <= e.r; r++) {
+                for (let c = s.c; c <= e.c; c++) {
+                    const cellAddress = XLSX.utils.encode_cell({ r, c });
+                    if (r === s.r && c === s.c) continue;
+                    
+                    if (!sheet[cellAddress]) {
+                        sheet[cellAddress] = { t: 's', v: value };
+                    } else {
+                        sheet[cellAddress].v = value;
+                    }
+                }
+            }
+        }
+    });
+    
+    return sheet;
+}
+
+/**
+ * 生成 SQL Server 建表语句
+ */
+function generateSQL(sheet, sheetName) {
+    // 1. 预处理：处理合并单元格
+    preprocessSheet(sheet);
+
+    // 2. 转换为二维数组
+    const sheetData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    let tableName = '';
+    let headers = {}; 
+    let fields = [];
+    let headerRowIndex = -1;
+
+    // 3. 寻找表名和表头索引
+    for (let i = 0; i < sheetData.length; i++) {
+        const row = sheetData[i];
+        if (!row) continue;
+
+        // 寻找表名
+        if (!tableName) {
+            for (let j = 0; j < row.length; j++) {
+                const cellVal = row[j] ? String(row[j]).toLowerCase().trim() : '';
+                if (cellVal === 'tableid') {
+                    if (sheetData[i + 1] && sheetData[i + 1][j]) {
+                        tableName = sheetData[i + 1][j];
+                        console.log(`  🏷️  找到表名: ${tableName} (在第 ${i+2} 行)`);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 寻找字段定义的表头行
+        const rowStr = JSON.stringify(row).toLowerCase();
+        if (rowStr.includes('物理名') && rowStr.includes('data型')) {
+            headerRowIndex = i;
+            row.forEach((cell, index) => {
+                if (cell) {
+                    const key = String(cell).trim();
+                    headers[key] = index;
+                }
+            });
+            console.log(`  📋  找到表头行: 第 ${i+1} 行`);
+            break;
+        }
+    }
+
+    // 验证
+    if (!tableName) {
+        console.warn(`  ⚠️  跳过 "${sheetName}": 未找到 'tableID'`);
+        return null;
+    }
+    if (headerRowIndex === -1) {
+        console.warn(`  ⚠️  跳过 "${sheetName}": 未找到字段定义表头`);
+        return null;
+    }
+
+    // 4. 解析字段信息
+    for (let i = headerRowIndex + 1; i < sheetData.length; i++) {
+        const row = sheetData[i];
+        if (!row) continue;
+
+        const physicalNameCol = headers['物理名'];
+        if (physicalNameCol === undefined || !row[physicalNameCol]) continue;
+
+        const physicalName = row[physicalNameCol];
+        const dataType = row[headers['data型']];
+        const length = row[headers['长度']];
+        
+        // --- 修改点：处理长度为 "-" 的情况 ---
+        let fullType = dataType ? String(dataType) : '';
+        
+        // 只有当 length 存在，且不是空字符串，且不是 "-" 时，才拼接括号
+        // 使用 trim() 防止单元格里有空格
+        const lengthStr = length ? String(length).trim() : '';
+        
+        if (lengthStr && lengthStr !== '-') {
+            fullType += `(${lengthStr})`;
+        }
+
+        // 检查约束
+        const notNullCol = headers['Not Null'];
+        const isNotNull = notNullCol !== undefined && row[notNullCol] && String(row[notNullCol]).trim() !== '';
+        
+        const primaryKeyCol = headers['主key'];
+        const isPrimaryKey = primaryKeyCol !== undefined && row[primaryKeyCol] && String(row[primaryKeyCol]).trim() !== '';
+
+        fields.push({
+            name: physicalName,
+            type: fullType,
+            isNotNull: isNotNull,
+            isPrimaryKey: isPrimaryKey
+        });
+    }
+
+    if (fields.length === 0) return null;
+
+    // 5. 拼接 SQL
+    let sql = `-- Table structure for ${tableName}\r\n`;
+    sql += `IF OBJECT_ID(N'[${tableName}]', N'U') IS NOT NULL DROP TABLE [${tableName}];\r\n`;
+    sql += `CREATE TABLE [${tableName}] (\r\n`;
+
+    const fieldLines = fields.map(field => {
+        let line = `    [${field.name}] ${field.type}`;
+        if (isCharacterType(field.type)) line += ' COLLATE Japanese_CI_AS';
+        if (field.isNotNull) line += ' NOT NULL';
+        if (field.isPrimaryKey) line += ' PRIMARY KEY';
+        return line;
+    });
+
+    sql += fieldLines.join(',\r\n');
+    sql += `\r\n);\r\n\r\n`;
+
+    return sql;
+}
+
+// --- 主执行流程 ---
+
+try {
+    if (!fs.existsSync(inputFile)) {
+        console.error(`❌ 错误：找不到输入文件 "${inputFile}"`);
+        process.exit(1);
+    }
+
+    console.log(`🚀 正在读取文件: ${inputFile}...`);
+    const workbook = XLSX.readFile(inputFile);
+    
+    if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
+        throw new Error("原始 Excel 文件是空的。");
+    }
+
+    const newWorkbook = XLSX.utils.book_new();
+    let successCount = 0;
+
+    workbook.SheetNames.forEach(sheetName => {
+        console.log(`\n🔍 处理 Sheet: [${sheetName}]...`);
+        
+        const sheet = workbook.Sheets[sheetName];
+        const sql = generateSQL(sheet, sheetName);
+
+        if (sql) {
+            const sqlData = [[`-- ${sheetName} DDL`], [sql]];
+            const newSheet = XLSX.utils.aoa_to_sheet(sqlData);
+            newSheet['!cols'] = [{ wch: 100 }];
+            XLSX.utils.book_append_sheet(newWorkbook, newSheet, sheetName);
+            successCount++;
+            console.log(`  ✅ [${sheetName}] 生成成功`);
+        }
+    });
+
+    if (successCount === 0) {
+        console.error(`\n❌ 失败：所有 Sheet 都未能生成 SQL。`);
+    } else {
+        XLSX.writeFile(newWorkbook, outputFile);
+        console.log(`\n🎉 完成！成功处理 ${successCount} 个表。`);
+        console.log(`📁 文件已保存至: ${outputFile}`);
+    }
+
+} catch (error) {
+    console.error('\n❌ 发生错误:', error);
+}
+
