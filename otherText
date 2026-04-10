@@ -1,0 +1,158 @@
+const XLSX = require('xlsx');
+const path = require('path');
+
+// 配置输入输出文件路径
+const inputFile = 'source.xlsx'; 
+const outputFile = 'generated_ddl_jp.xlsx';
+
+/**
+ * 判断是否为字符类型字段
+ */
+function isCharacterType(type) {
+    if (!type) return false;
+    const t = type.toUpperCase();
+    // 包含常见的字符类型
+    return t.includes('CHAR') || t.includes('TEXT') || t.includes('VARCHAR') || t.includes('NVARCHAR');
+}
+
+/**
+ * 生成 SQL Server 建表语句
+ */
+function generateSQL(sheetData, sheetName) {
+    let tableName = '';
+    let headers = {}; 
+    let fields = [];
+    
+    let headerRowIndex = -1;
+
+    // 1. 寻找表名和表头索引
+    for (let i = 0; i < sheetData.length; i++) {
+        const row = sheetData[i];
+        
+        // 寻找表名
+        if (!tableName) {
+            for (let j = 0; j < row.length; j++) {
+                if (row[j] && String(row[j]).toLowerCase().trim() === 'tableid') {
+                    if (sheetData[i + 1] && sheetData[i + 1][j]) {
+                        tableName = sheetData[i + 1][j];
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 寻找字段定义的表头行
+        const rowStr = JSON.stringify(row).toLowerCase();
+        if (rowStr.includes('物理名') && rowStr.includes('data型')) {
+            headerRowIndex = i;
+            row.forEach((cell, index) => {
+                if (cell) {
+                    const key = String(cell).trim();
+                    headers[key] = index;
+                }
+            });
+            break;
+        }
+    }
+
+    if (!tableName) return null;
+    if (headerRowIndex === -1) return null;
+
+    // 2. 解析字段信息
+    for (let i = headerRowIndex + 1; i < sheetData.length; i++) {
+        const row = sheetData[i];
+        
+        const physicalNameCol = headers['物理名'];
+        if (!row || !row[physicalNameCol]) continue;
+
+        const physicalName = row[physicalNameCol];
+        const dataType = row[headers['data型']];
+        const length = row[headers['长度']];
+        
+        // 构建类型定义
+        let fullType = dataType ? String(dataType) : '';
+        if (length && length !== '') {
+            fullType += `(${length})`;
+        }
+
+        // 检查约束
+        const notNullCol = headers['Not Null'];
+        const isNotNull = notNullCol !== undefined && row[notNullCol] && String(row[notNullCol]).trim() !== '';
+        
+        const primaryKeyCol = headers['主key'];
+        const isPrimaryKey = primaryKeyCol !== undefined && row[primaryKeyCol] && String(row[primaryKeyCol]).trim() !== '';
+
+        fields.push({
+            name: physicalName,
+            type: fullType,
+            isNotNull: isNotNull,
+            isPrimaryKey: isPrimaryKey
+        });
+    }
+
+    // 3. 拼接 SQL 语句
+    if (fields.length === 0) return null;
+
+    let sql = `-- Table structure for ${tableName}\r\n`;
+    sql += `IF OBJECT_ID(N'[${tableName}]', N'U') IS NOT NULL DROP TABLE [${tableName}];\r\n`;
+    sql += `CREATE TABLE [${tableName}] (\r\n`;
+
+    const fieldLines = fields.map(field => {
+        let line = `    [${field.name}] ${field.type}`;
+        
+        // --- 修改点：日语 Collate 处理 ---
+        // 如果是字符类型，追加 COLLATE Japanese_CI_AS
+        // 注意：COLLATE 必须放在 NOT NULL 之前
+        if (isCharacterType(field.type)) {
+            line += ' COLLATE Japanese_CI_AS';
+        }
+
+        if (field.isNotNull) {
+            line += ' NOT NULL';
+        }
+        
+        if (field.isPrimaryKey) {
+            line += ' PRIMARY KEY';
+        }
+        
+        return line;
+    });
+
+    sql += fieldLines.join(',\r\n');
+    sql += `\r\n);\r\n\r\n`;
+
+    return sql;
+}
+
+// --- 主执行流程 ---
+
+try {
+    console.log(`🚀 正在读取文件: ${inputFile}...`);
+    
+    const workbook = XLSX.readFile(inputFile);
+    const newWorkbook = XLSX.utils.book_new();
+
+    workbook.SheetNames.forEach(sheetName => {
+        console.log(`🔍 处理 Sheet: ${sheetName}...`);
+        
+        const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+        const sql = generateSQL(sheetData, sheetName);
+
+        if (sql) {
+            const sqlData = [[`-- ${sheetName} DDL`], [sql]];
+            const newSheet = XLSX.utils.aoa_to_sheet(sqlData);
+            newSheet['!cols'] = [{ wch: 100 }]; // 加宽列宽以适应更长的 SQL
+            XLSX.utils.book_append_sheet(newWorkbook, newSheet, sheetName);
+            console.log(`✅ ${sheetName} 生成成功`);
+        } else {
+            console.log(`⏭️ ${sheetName} 被跳过`);
+        }
+    });
+
+    XLSX.writeFile(newWorkbook, outputFile);
+    console.log(`🎉 完成！DDL 已生成并保存到: ${outputFile}`);
+
+} catch (error) {
+    console.error('❌ 发生错误:', error);
+}
+
