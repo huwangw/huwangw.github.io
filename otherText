@@ -369,3 +369,189 @@ try {
     console.error('\n❌ 发生错误:', error);
 }
 
+
+const ExcelJS = require('exceljs');
+const fs = require('fs');
+
+/**
+ * 主函数：读取源文件并生成SQL
+ * @param {string} inputPath - 输入的Excel文件路径
+ * @param {string} outputPath - 输出的Excel文件路径
+ */
+async function generateDDL(inputPath, outputPath) {
+    // 1. 初始化工作簿
+    const workbook = new ExcelJS.Workbook();
+    
+    // 检查文件是否存在
+    if (!fs.existsSync(inputPath)) {
+        console.error(`❌ 错误：找不到文件 ${inputPath}`);
+        return;
+    }
+
+    await workbook.xlsx.readFile(inputPath);
+    
+    // 创建一个新的工作簿用于存放结果
+    const outputWorkbook = new ExcelJS.Workbook();
+
+    console.log(`\n🚀 开始处理文件：${inputPath}...`);
+
+    // 2. 遍历每一个 Sheet
+    workbook.eachSheet(async (worksheet, sheetId) => {
+        console.log(`\n📄 正在处理 Sheet: ${worksheet.name}`);
+        
+        let currentTableName = "";
+        let fieldDefinitions = [];
+        
+        // 用于定位字段表格的表头索引
+        let headerRowIndex = -1;
+        let colMap = {}; // 存储列名到列索引的映射，例如 { "物理名": 1, "data型": 2 ... }
+
+        // 3. 逐行扫描
+        // 注意：ExcelJS 的行索引从 1 开始
+        worksheet.eachRow((row, rowNumber) => {
+            // --- 逻辑 A: 查找表名 (基于合并单元格) ---
+            // 遍历当前行的所有单元格
+            row.eachCell((cell, colNumber) => {
+                // 检查是否是合并单元格
+                // ExcelJS 中，合并单元格的主单元格会有 model 属性或者可以通过 worksheet._merges 查找
+                // 这里我们使用一种更通用的方法：检查 cell.model 或 cell.type
+                // 实际上，最简单的方法是检查 row._cells 的合并状态，但为了简化，
+                // 我们假设 "tableID" 这种特定的合并单元格通常占据一行，且表名在下一行。
+                
+                // 这里的逻辑稍微调整：我们寻找包含 "tableID" 文本的合并单元格
+                // 注意：合并单元格的值通常只在左上角单元格存在
+                if (cell.value && cell.value.toString().includes('tableID')) {
+                     // 获取合并区域信息 (如果存在)
+                     const merge = worksheet.getMergeModel().find(m => 
+                        m.top === rowNumber && m.left === colNumber
+                     );
+                     
+                     if (merge) {
+                         // 如果是合并单元格，且包含 tableID，则下一行的同一列位置应该是表名
+                         // 获取下一行
+                         const nextRow = worksheet.getRow(rowNumber + 1);
+                         // 获取对应列的值 (通常表名也会在合并单元格下方居中或对应位置)
+                         // 这里简单取下一行同一列的值
+                         const nameCell = nextRow.getCell(colNumber);
+                         if (nameCell.value) {
+                             currentTableName = nameCell.value.toString().trim();
+                             console.log(`   🆔 识别到表名: ${currentTableName}`);
+                         }
+                     }
+                }
+            });
+
+            // --- 逻辑 B: 查找字段定义表头 ---
+            // 寻找包含 "物理名" 的表头行
+            row.eachCell((cell, colNumber) => {
+                if (cell.value && cell.value.toString() === '物理名') {
+                    headerRowIndex = rowNumber;
+                    // 记录各列的位置
+                    // 我们不需要预先知道所有列，可以在后面动态获取，但为了效率这里先扫描一次
+                    // 重新扫描该行建立映射
+                    row.eachCell((hCell, hCol) => {
+                        if(hCell.value) {
+                            colMap[hCell.value.toString()] = hCol;
+                        }
+                    });
+                }
+            });
+
+            // --- 逻辑 C: 解析字段数据 ---
+            // 如果已经找到了表头，且当前行在表头之后
+            if (headerRowIndex > 0 && rowNumber > headerRowIndex) {
+                // 检查是否是空行或结束行（例如遇到新的 "tableID" 或空行）
+                // 简单判断：如果 "物理名" 列没有值，可能意味着表格结束
+                const physicalNameCol = colMap['物理名'];
+                const physicalNameVal = row.getCell(physicalNameCol).value;
+
+                if (!physicalNameVal) {
+                    // 可能是表格结束了，重置表头索引以便处理下一个表格（如果同一个sheet有多个表）
+                    // 但根据你的描述，似乎一个sheet对应一张表，这里暂不重置，防止误判
+                    return; 
+                }
+
+                // 提取字段信息
+                const getFieldVal = (key) => {
+                    const col = colMap[key];
+                    if (!col) return null;
+                    const val = row.getCell(col).value;
+                    return val ? val.toString().trim() : null;
+                };
+
+                const fieldName = getFieldVal('物理名');
+                const dataType = getFieldVal('data型');
+                const length = getFieldVal('长度');
+                const isPrimaryKey = getFieldVal('主key');
+                const isNotNull = getFieldVal('Not Null');
+
+                if (fieldName) {
+                    // 处理类型和长度
+                    let fullType = dataType;
+                    
+                    // 规则：如果长度列没有值或者包含-时则认为他是数字类型
+                    const isNumeric = !length || length.includes('-');
+                    
+                    if (!isNumeric && length) {
+                        fullType = `${dataType}(${length})`;
+                        // 文字字段加上 Collate
+                        fullType += ' Collate japanese_CI_AS';
+                    }
+
+                    // 组装 DDL 行
+                    let ddlLine = `    [${fieldName}] ${fullType}`;
+                    
+                    // 处理 Not Null
+                    if (isNotNull) {
+                        ddlLine += ' NOT NULL';
+                    }
+
+                    // 处理主键 (注意：SQL Server 主键通常定义在列定义之后，或者作为表级约束)
+                    // 这里按照简单的列级约束处理
+                    if (isPrimaryKey) {
+                        ddlLine += ' PRIMARY KEY';
+                    }
+
+                    fieldDefinitions.push(ddlLine);
+                }
+            }
+        });
+
+        // 4. 生成最终 SQL
+        let finalSQL = "";
+        if (currentTableName) {
+            finalSQL += `IF OBJECT_ID('[${currentTableName}]', 'U') IS NOT NULL DROP TABLE [${currentTableName}];\n`;
+            finalSQL += `CREATE TABLE [${currentTableName}] (\n`;
+            finalSQL += fieldDefinitions.join(',\n');
+            finalSQL += `\n);\n`;
+        } else {
+            finalSQL = "-- 未找到表名";
+        }
+
+        // 5. 写入输出工作簿
+        const outputSheet = outputWorkbook.addWorksheet(worksheet.name);
+        outputSheet.addRow([finalSQL]);
+        // 设置自动换行和列宽，方便查看
+        outputSheet.getRow(1).font = { name: 'Consolas', size: 10 };
+        outputSheet.getRow(1).alignment = { wrapText: true, vertical: 'top' };
+        outputSheet.getColumn(1).width = 80;
+
+    });
+
+    // 6. 保存文件
+    await outputWorkbook.xlsx.writeFile(outputPath);
+    console.log(`\n✅ 处理完成！SQL已生成并保存至: ${outputPath}`);
+}
+
+// 运行工具
+// 请确保当前目录下有 input.xlsx，或者修改为实际的文件路径
+const inputFile = 'input.xlsx'; 
+const outputFile = 'output_sql.xlsx';
+
+// 如果只是为了演示，你可以创建一个简单的测试文件，或者修改这里的路径
+if (fs.existsSync(inputFile)) {
+    generateDDL(inputFile, outputFile);
+} else {
+    console.log(`⚠️ 请在同目录下放置名为 '${inputFile}' 的Excel文件后再运行。`);
+}
+
