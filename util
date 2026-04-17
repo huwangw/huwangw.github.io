@@ -210,3 +210,244 @@ public class AspxToThymeleafConverter {
     }
 }
 
+
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class AspxToThymeleafConverter {
+    // ASPX控件映射模板（使用{{占位符}}避免与Thymeleaf语法冲突）
+    private static final Map<String, String> CONTROL_TEMPLATES = new HashMap<>();
+    // 正则表达式模式（明确分组索引，避免歧义）
+    private static final Pattern ASPX_PAGE_DECLARATION = Pattern.compile("<%@ Page[^>]+ %>");
+    private static final Pattern MASTER_PAGE_REFERENCE = Pattern.compile("MasterPageFile=\"([^\"]+)\"");
+    private static final Pattern ASP_CONTROL = Pattern.compile("<asp:(\\w+)([^>]*)>"); // 分组1:控件类型, 分组2:属性集
+    private static final Pattern ASP_CONTROL_CLOSE = Pattern.compile("</asp:\\w+>");
+    private static final Pattern DATA_BIND_EVAL = Pattern.compile("<%#\\s*Eval\\(\"([^\"]+)\"\\)\\s*%>");
+    private static final Pattern DATA_BIND_EXPR = Pattern.compile("<%=\\s*([^%]+)\\s*%>");
+    private static final Pattern LINK_HREF = Pattern.compile("<link\\s+href=\"([^\"]+)\"");
+    private static final Pattern SCRIPT_SRC = Pattern.compile("<script\\s+src=\"([^\"]+)\"");
+    private static final Pattern FORM_RUNAT_SERVER = Pattern.compile("<form\\s+runat=\"server\"([^>]+)>");
+    private static final Pattern CONTROL_ATTRIBUTE = Pattern.compile("(\\w+)=\"([^\"]+)\""); // 分组1:属性名, 分组2:属性值
+
+    static {
+        // 初始化控件转换模板（使用{{属性名}}作为占位符）
+        CONTROL_TEMPLATES.put("Button", "<button type=\"submit\" th:text=\"{{Text}}\" th:onclick=\"{{OnClick}}\" id=\"{{ID}}\" />");
+        CONTROL_TEMPLATES.put("TextBox", "<input type=\"text\" th:field=\"*{ {{ID}} }\" th:value=\"{{Text}}\" />");
+        CONTROL_TEMPLATES.put("Label", "<span th:text=\"{{Text}}\" id=\"{{ID}}\"></span>");
+        CONTROL_TEMPLATES.put("HyperLink", "<a th:href=\"@{ {{NavigateUrl}} }\" th:text=\"{{Text}}\"></a>");
+        CONTROL_TEMPLATES.put("CheckBox", "<input type=\"checkbox\" id=\"{{ID}}\" th:checked=\"{{Checked}}\" th:name=\"{{ID}}\" />");
+        CONTROL_TEMPLATES.put("DropDownList", "<select id=\"{{ID}}\" th:field=\"*{ {{ID}} }\"></select>");
+    }
+
+    public static void main(String[] args) {
+        // 示例：转换单个ASPX文件
+        String aspxFilePath = "src/main/webapp/Default.aspx";
+        String thymeleafFilePath = "src/main/resources/templates/default.html";
+        try {
+            convertAspxToThymeleaf(aspxFilePath, thymeleafFilePath);
+            System.out.println("转换完成：" + thymeleafFilePath);
+        } catch (IOException e) {
+            System.err.println("转换失败：" + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * 将ASPX文件转换为Thymeleaf HTML文件
+     * @param aspxPath ASPX文件路径
+     * @param thymeleafPath 目标Thymeleaf文件路径
+     */
+    public static void convertAspxToThymeleaf(String aspxPath, String thymeleafPath) throws IOException {
+        // 1. 读取ASPX内容（指定UTF-8编码避免乱码）
+        String content = new String(Files.readAllBytes(Paths.get(aspxPath)), "UTF-8");
+
+        // 2. 处理页面声明（替换MasterPage为Thymeleaf布局）
+        content = processPageDeclaration(content);
+
+        // 3. 处理服务器端表单
+        content = processServerForm(content);
+
+        // 4. 转换ASPX服务器控件（修复分组问题的核心方法）
+        content = convertAspControls(content);
+
+        // 5. 处理数据绑定表达式
+        content = processDataBindings(content);
+
+        // 6. 处理资源引用（link和script）
+        content = processResourceReferences(content);
+
+        // 7. 清理残留的ASPX标签
+        content = cleanAspxTags(content);
+
+        // 8. 写入目标文件
+        ensureParentDir(thymeleafPath);
+        try (FileWriter writer = new FileWriter(thymeleafPath)) {
+            writer.write(content);
+        }
+    }
+
+    /**
+     * 处理页面声明，替换MasterPage为Thymeleaf布局
+     */
+    private static String processPageDeclaration(String content) {
+        Matcher matcher = ASPX_PAGE_DECLARATION.matcher(content);
+        if (matcher.find()) {
+            String pageDecl = matcher.group();
+            // 提取MasterPage并转换为Thymeleaf布局引用
+            Matcher masterMatcher = MASTER_PAGE_REFERENCE.matcher(pageDecl);
+            String layoutRef = "";
+            if (masterMatcher.find()) {
+                String masterPath = masterMatcher.group(1)
+                        .replaceAll("/", "")
+                        .replace(".master", "");
+                layoutRef = " layout:decorate=\"~{layouts/" + masterPath + "}\"";
+            }
+            // 替换为Thymeleaf的html标签
+            return matcher.replaceFirst("<html" + layoutRef + ">");
+        }
+        return content;
+    }
+
+    /**
+     * 处理服务器端表单（runat="server"）
+     */
+    private static String processServerForm(String content) {
+        Matcher matcher = FORM_RUNAT_SERVER.matcher(content);
+        if (matcher.find()) {
+            String formAttrs = matcher.group(1);
+            // 提取action属性并转换为Thymeleaf格式
+            String action = "";
+            Matcher actionMatcher = Pattern.compile("action=\"([^\"]+)\"").matcher(formAttrs);
+            if (actionMatcher.find()) {
+                String originalAction = actionMatcher.group(1).replace(".aspx", "");
+                action = " th:action=\"@{/" + originalAction + "}\"";
+            }
+            // 替换为标准HTML表单+Thymeleaf属性
+            return matcher.replaceFirst("<form method=\"post\"" + action + ">");
+        }
+        return content;
+    }
+
+    /**
+     * 转换ASPX服务器控件为HTML+Thymeleaf标签（修复分组引用错误）
+     */
+    private static String convertAspControls(String content) {
+        Matcher matcher = ASP_CONTROL.matcher(content);
+        StringBuffer result = new StringBuffer();
+        while (matcher.find()) {
+            // 检查分组数量，避免索引越界
+            if (matcher.groupCount() < 2) {
+                matcher.appendReplacement(result, matcher.group()); // 保留原标签，不处理
+                continue;
+            }
+
+            String controlType = matcher.group(1); // 控件类型（如Button、TextBox）
+            String controlAttrs = matcher.group(2); // 控件属性字符串（如ID="txt1" Text="用户名"）
+            // 获取对应转换模板，默认返回未支持提示
+            String template = CONTROL_TEMPLATES.getOrDefault(controlType, 
+                    "<!-- 未支持的控件类型：" + controlType + " -->");
+
+            // 解析属性并替换模板中的占位符
+            template = replaceControlAttributes(controlAttrs, template);
+            matcher.appendReplacement(result, template);
+        }
+        return matcher.appendTail(result).toString();
+    }
+
+    /**
+     * 替换模板中的{{属性名}}占位符为实际属性值
+     */
+    private static String replaceControlAttributes(String attrs, String template) {
+        Matcher attrMatcher = CONTROL_ATTRIBUTE.matcher(attrs);
+        while (attrMatcher.find()) {
+            // 检查属性分组是否存在
+            if (attrMatcher.groupCount() < 2) {
+                continue; // 跳过格式异常的属性
+            }
+            String attrName = attrMatcher.group(1); // 属性名（如Text、ID）
+            String attrValue = attrMatcher.group(2); // 属性值（如"提交"、"btnSubmit"）
+            // 替换模板中的{{属性名}}占位符
+            template = template.replace("{{" + attrName + "}}", attrValue);
+        }
+        // 清除未匹配的占位符（避免残留{{未知属性}}）
+        template = template.replaceAll("\\{\\{[^}]+\\}\\}", "");
+        return template;
+    }
+
+    /**
+     * 处理数据绑定表达式
+     */
+    private static String processDataBindings(String content) {
+        // 处理<%# Eval("Field") %> -> [[${field}]]
+        content = DATA_BIND_EVAL.matcher(content)
+                .replaceAll(match -> {
+                    if (match.groupCount() < 1) return match.group();
+                    return "[[${" + match.group(1).toLowerCase() + "}]]";
+                });
+
+        // 处理<%= Expression %> -> [[${expression}]]（简单转换）
+        content = DATA_BIND_EXPR.matcher(content)
+                .replaceAll(match -> {
+                    if (match.groupCount() < 1) return match.group();
+                    return "[[${" + match.group(1) + "}]]";
+                });
+
+        return content;
+    }
+
+    /**
+     * 处理资源引用（link和script）
+     */
+    private static String processResourceReferences(String content) {
+        // 处理<link href="..." -> <link th:href="@{...}"
+        content = LINK_HREF.matcher(content)
+                .replaceAll(match -> {
+                    if (match.groupCount() < 1) return match.group();
+                    return "<link th:href=\"@{/" + normalizePath(match.group(1)) + "\"";
+                });
+
+        // 处理<script src="..." -> <script th:src="@{...}"
+        content = SCRIPT_SRC.matcher(content)
+                .replaceAll(match -> {
+                    if (match.groupCount() < 1) return match.group();
+                    return "<script th:src=\"@{/" + normalizePath(match.group(1)) + "\"";
+                });
+
+        return content;
+    }
+
+    /**
+     * 标准化路径（去除多余的/）
+     */
+    private static String normalizePath(String path) {
+        return path.startsWith("/") ? path.substring(1) : path;
+    }
+
+    /**
+     * 清理残留的ASPX标签
+     */
+    private static String cleanAspxTags(String content) {
+        // 移除ASPX控件关闭标签（如</asp:Button>）
+        content = ASP_CONTROL_CLOSE.matcher(content).replaceAll("");
+        // 移除其他ASPX指令
+        content = content.replaceAll("<%@\\s+[^>]+%>", "");
+        return content;
+    }
+
+    /**
+     * 确保目标文件的父目录存在
+     */
+    private static void ensureParentDir(String filePath) {
+        File file = new File(filePath);
+        if (!file.getParentFile().exists()) {
+            file.getParentFile().mkdirs();
+        }
+    }
+}
+
