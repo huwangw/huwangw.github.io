@@ -2,6 +2,225 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <title>原生HTML 转 @material/web 转换器【无依赖·全兼容换行Input】</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        body {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #f5f5f5;
+        }
+        .title {
+            margin-bottom: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 16px;
+        }
+        .box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        textarea {
+            width: 100%;
+            height: 420px;
+            padding: 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.7;
+            background: #fff;
+            resize: vertical;
+            white-space: pre;
+        }
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 9px 22px;
+            border: none;
+            border-radius: 6px;
+            background: #333;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #555;
+        }
+        .tip {
+            font-size: 12px;
+            color: #666;
+            margin-top: 6px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="title">原始普通 HTML（粘贴原生代码）</div>
+    <div class="container">
+        <div class="box">
+            <textarea id="source" placeholder="粘贴任意原生HTML，input无论多少属性、怎么换行、跨行都可识别转换"></textarea>
+        </div>
+        <div class="box">
+            <textarea id="result" placeholder="转换完成的 @material/web 代码"></textarea>
+        </div>
+    </div>
+
+    <div class="btn-group">
+        <button onclick="convert()">一键转换为 material/web</button>
+        <button onclick="clearAll()">清空全部</button>
+    </div>
+
+    <div class="tip">
+        ✅ 纯原生JS，无任何外部依赖、无CDN、离线可用<br>
+        ✅ 完美兼容：input属性过多、标签换行、跨行、多属性乱序全部可识别<br>
+        ✅ 新增：input type="button" → md-outlined-button<br>
+        ✅ 完整input类型映射，所有属性(id/class/name/value等)全部原样保留<br>
+        ✅ 基于原生DOMParser解析，不再使用不稳定正则匹配
+    </div>
+
+<script>
+function convert() {
+    const sourceHtml = document.getElementById('source').value.trim();
+    if (!sourceHtml) {
+        alert('请粘贴原始HTML代码');
+        return;
+    }
+
+    // 原生DOM解析，无视所有换行、空格、格式
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(sourceHtml, 'text/html');
+    const container = doc.body;
+
+    // ========== 完整映射表 ==========
+    const inputMap = {
+        text: 'md-outlined-text-field',
+        password: 'md-outlined-text-field',
+        number: 'md-outlined-text-field',
+        checkbox: 'md-checkbox',
+        radio: 'md-radio',
+        range: 'md-slider',
+        // 你新增的：input type="button" 转为轮廓按钮
+        button: 'md-outlined-button'
+    };
+
+    // 遍历所有input标签，全部转换
+    const allInputs = container.querySelectorAll('input');
+    allInputs.forEach(oldInput => {
+        const type = oldInput.type || 'text';
+        const newTag = inputMap[type];
+        if (!newTag) return;
+
+        const newEl = document.createElement(newTag);
+        // 复制全部所有属性，一个不漏
+        copyAllAttr(oldInput, newEl);
+        oldInput.parentNode.replaceChild(newEl, oldInput);
+    });
+
+    // 原生 <button> 标签 → md-button
+    container.querySelectorAll('button').forEach(old => {
+        const el = document.createElement('md-button');
+        el.innerHTML = old.innerHTML;
+        copyAllAttr(old, el);
+        old.replaceWith(el);
+    });
+
+    // <a> 链接 → md-link
+    container.querySelectorAll('a').forEach(old => {
+        const el = document.createElement('md-link');
+        el.innerHTML = old.innerHTML;
+        copyAllAttr(old, el);
+        old.replaceWith(el);
+    });
+
+    // <textarea> → md-textarea
+    container.querySelectorAll('textarea').forEach(old => {
+        const el = document.createElement('md-textarea');
+        el.innerHTML = old.innerHTML;
+        copyAllAttr(old, el);
+        old.replaceWith(el);
+    });
+
+    // <select> → md-select
+    container.querySelectorAll('select').forEach(old => {
+        const el = document.createElement('md-select');
+        el.innerHTML = old.innerHTML;
+        copyAllAttr(old, el);
+        old.replaceWith(el);
+    });
+
+    // <option> → md-option
+    container.querySelectorAll('option').forEach(old => {
+        const el = document.createElement('md-option');
+        el.innerHTML = old.innerHTML;
+        copyAllAttr(old, el);
+        old.replaceWith(el);
+    });
+
+    // div class="card" → md-card
+    container.querySelectorAll('div.card').forEach(old => {
+        const el = document.createElement('md-card');
+        el.innerHTML = old.innerHTML;
+        copyAllAttr(old, el);
+        old.replaceWith(el);
+    });
+
+    // 导出最终HTML代码
+    const resultHtml = container.innerHTML;
+    document.getElementById('result').value = resultHtml;
+}
+
+// 通用工具：复制元素全部属性（包含自定义data-*属性）
+function copyAllAttr(source, target) {
+    Array.from(source.attributes).forEach(attr => {
+        target.setAttribute(attr.name, attr.value);
+    });
+}
+
+// 清空全部
+function clearAll() {
+    document.getElementById('source').value = '';
+    document.getElementById('result').value = '';
+}
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
     <title>原生HTML 转 @material/web 转换器【纯本地无依赖】</title>
     <style>
         * {
