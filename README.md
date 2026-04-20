@@ -1,3 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>原生HTML 转 @material/web 转换器【纯本地无依赖】</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        body {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #f5f5f5;
+        }
+        .title {
+            margin-bottom: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 16px;
+        }
+        .box {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        textarea {
+            width: 100%;
+            height: 420px;
+            padding: 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.7;
+            background: #fff;
+            resize: vertical;
+            white-space: pre;
+        }
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 9px 22px;
+            border: none;
+            border-radius: 6px;
+            background: #333;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #555;
+        }
+        .tip {
+            font-size: 12px;
+            color: #666;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div class="title">原始普通 HTML（粘贴原生代码）</div>
+    <div class="container">
+        <div class="box">
+            <textarea id="source" placeholder="在此粘贴原生HTML：button、input、select、a、div、textarea、checkbox、radio 等全部原生标签"></textarea>
+        </div>
+        <div class="box">
+            <textarea id="result" placeholder="转换完成的 @material/web 代码会在此显示，直接复制使用"></textarea>
+        </div>
+    </div>
+
+    <div class="btn-group">
+        <button onclick="convert()">一键转换为 material/web 标签</button>
+        <button onclick="clearAll()">清空全部内容</button>
+    </div>
+
+    <div class="tip">
+        ✅ 本工具纯本地原生JS编写，无任何外部CDN、无第三方包、无外部依赖、无网络请求<br>
+        ✅ 仅做标签替换转换，保留所有原生属性（id/class/name/value/placeholder/disabled/required等）<br>
+        ✅ 转换后代码直接复制到你的项目，使用你项目自身已引入的 @material/web 即可运行
+    </div>
+
+<script>
+/**
+ * 纯原生JS转换核心
+ * 无任何外部依赖、无外部脚本、无网络请求
+ * 原生HTML 自动转为 @material/web M3 自定义标签
+ */
+function convert() {
+    let html = document.getElementById('source').value;
+    if (!html.trim()) {
+        alert('请先粘贴原始HTML代码');
+        return;
+    }
+
+    // 全部转换规则：正则 + 替换
+    // 统一非贪婪匹配，兼容：多空格、单/双引号、自闭合标签、无闭合标签、属性乱序
+    const rules = [
+        // 1. 原生 button -> md-button
+        [/<button([^>]*?)>([\s\S]*?)<\/button>/gi, '<md-button$1>$2</md-button>'],
+
+        // 2. 文本输入框 input type="text"
+        [/<input([^>]*?)type\s*=\s*(["'])text\1([^>]*?)\/?>/gi, '<md-outlined-text-field$1$3></md-outlined-text-field>'],
+        [/<input([^>]*?)type\s*=\s*(["'])text\1([^>]*?)>/gi, '<md-outlined-text-field$1$3></md-outlined-text-field>'],
+
+        // 3. 密码框 password
+        [/<input([^>]*?)type\s*=\s*(["'])password\1([^>]*?)\/?>/gi, '<md-outlined-text-field type="password"$1$3></md-outlined-text-field>'],
+        [/<input([^>]*?)type\s*=\s*(["'])password\1([^>]*?)>/gi, '<md-outlined-text-field type="password"$1$3></md-outlined-text-field>'],
+
+        // 4. 数字输入 number
+        [/<input([^>]*?)type\s*=\s*(["'])number\1([^>]*?)\/?>/gi, '<md-outlined-text-field type="number"$1$3></md-outlined-text-field>'],
+        [/<input([^>]*?)type\s*=\s*(["'])number\1([^>]*?)>/gi, '<md-outlined-text-field type="number"$1$3></md-outlined-text-field>'],
+
+        // 5. 复选框 checkbox
+        [/<input([^>]*?)type\s*=\s*(["'])checkbox\1([^>]*?)\/?>/gi, '<md-checkbox$1$3></md-checkbox>'],
+        [/<input([^>]*?)type\s*=\s*(["'])checkbox\1([^>]*?)>/gi, '<md-checkbox$1$3></md-checkbox>'],
+
+        // 6. 单选框 radio
+        [/<input([^>]*?)type\s*=\s*(["'])radio\1([^>]*?)\/?>/gi, '<md-radio$1$3></md-radio>'],
+        [/<input([^>]*?)type\s*=\s*(["'])radio\1([^>]*?)>/gi, '<md-radio$1$3></md-radio>'],
+
+        // 7. 开关 switch
+        [/<input([^>]*?)type\s*=\s*(["'])checkbox\1([^>]*?)class\s*=\s*(["'])switch\4([^>]*?)\/?>/gi, '<md-switch$1$5></md-switch>'],
+        [/<input([^>]*?)type\s*=\s*(["'])checkbox\1([^>]*?)class\s*=\s*(["'])switch\4([^>]*?)>/gi, '<md-switch$1$5></md-switch>'],
+
+        // 8. 超链接 a -> md-link
+        [/<a([^>]*?)>([\s\S]*?)<\/a>/gi, '<md-link$1>$2</md-link>'],
+
+        // 9. 文本域 textarea
+        [/<textarea([^>]*?)>([\s\S]*?)<\/textarea>/gi, '<md-textarea$1>$2</md-textarea>'],
+
+        // 10. 下拉框 select + option
+        [/<select([^>]*?)>([\s\S]*?)<\/select>/gi, '<md-select$1>$2</md-select>'],
+        [/<option([^>]*?)>([\s\S]*?)<\/option>/gi, '<md-option$1>$2</md-option>'],
+
+        // 11. 卡片 div class="card"
+        [/<div([^>]*?)class\s*=\s*(["'])card\2([^>]*?)>([\s\S]*?)<\/div>/gi, '<md-card$1$3>$4</md-card>'],
+
+        // 12. 滑块 range
+        [/<input([^>]*?)type\s*=\s*(["'])range\1([^>]*?)\/?>/gi, '<md-slider$1$3></md-slider>'],
+        [/<input([^>]*?)type\s*=\s*(["'])range\1([^>]*?)>/gi, '<md-slider$1$3></md-slider>'],
+    ];
+
+    // 依次执行所有转换规则
+    rules.forEach(([reg, replace]) => {
+        html = html.replace(reg, replace);
+    });
+
+    document.getElementById('result').value = html;
+}
+
+// 清空所有输入输出
+function clearAll() {
+    document.getElementById('source').value = '';
+    document.getElementById('result').value = '';
+}
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 {
   // 关闭vscode原生自带弱CSS校验，避免冲突
   "css.validate": false,
