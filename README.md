@@ -1,3 +1,43 @@
+{
+  // 关闭vscode原生自带弱CSS校验，避免冲突
+  "css.validate": false,
+  "less.validate": false,
+  "scss.validate": false,
+
+  // Stylelint 核心配置：开启、实时校验、保存自动修复
+  "stylelint.validate": ["css", "less", "scss", "html"],
+  "editor.codeActionsOnSave": {
+    // 保存自动修复所有Stylelint错误（包含缺px自动补全）
+    "source.fixAll.stylelint": true
+  },
+
+  // 强制所有宽高尺寸必须带px单位，无单位直接报错+自动补px
+  "stylelint.config": {
+    "rules": {
+      // 核心规则：禁止尺寸值无单位（width/height/top/left等）
+      "length-no-zero-units": null,
+      "unit-no-unknown": true,
+      "value-no-vendor-prefix": null,
+      // 自定义：数字必须带px，0可以无单位（0 不用px）
+      "declaration-property-value-allowed-list": {
+        "/^(width|height|top|left|right|bottom|margin|padding)/": ["/^\\d+px$/", "0"]
+      }
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 83import com.aspose.cells.*;
 
 public void setupColumnDataValidations(Worksheet worksheet, int strtRow, it endRow) {
