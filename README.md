@@ -1,3 +1,233 @@
+
+const cheerio = require('cheerio');
+const fs = require('fs-extra');
+const path = require('path');
+
+// -------------------------- 配置参数 --------------------------
+const INPUT_DIR = './old_html_files';   // 待处理文件目录（修改为你的目录）
+const OUTPUT_DIR = './new_html_files';  // 输出目录（自动创建）
+const FILE_EXTENSIONS = ['.html', '.aspx'];  // 需要处理的文件后缀
+
+// 核心属性映射规则：{原属性: [CSS属性, 单位/固定值]}
+const ATTR_MAPPING = {
+  // 布局与尺寸
+  width: ['width', 'px'],
+  height: ['height', 'px'],
+  vspace: ['margin-top', 'px'],
+  hspace: ['margin-left', 'px'],
+  cellspacing: ['border-spacing', 'px'],
+  cellpadding: ['padding', 'px'],
+
+  // 边框与背景
+  border: ['border', 'px solid'],
+  bordercolor: ['border-color', ''],
+  bgcolor: ['background-color', ''],
+  background: ['background', ''],
+
+  // 文本对齐与样式（不含size，单独处理）
+  align: ['text-align', ''],
+  valign: ['vertical-align', ''],
+  nowrap: ['white-space', 'nowrap'],
+  color: ['color', ''],
+  face: ['font-family', ''],
+
+  // 表格与单元格
+  colspan: ['grid-column', 'span '],
+  rowspan: ['grid-row', 'span '],
+  bordercolordark: ['border-left-color', ''],
+  bordercolorlight: ['border-right-color', ''],
+
+  // 其他
+  clear: ['clear', ''],
+  float: ['float', ''],
+  dir: ['direction', ''],
+  lang: ['lang', '']
+};
+// --------------------------------------------------------------
+
+/**
+ * 为纯数字值添加单位（如100 → 100px，已带单位则不变）
+ * @param {string} value - 属性值
+ * @param {string} unit - 默认单位（如px）
+ * @returns {string} 带单位的属性值
+ */
+function addUnit(value, unit) {
+  if (!unit) return value;
+  const numRegex = /^\d+(\.\d+)?$/;
+  if (numRegex.test(value.trim())) {
+    return `${value}${unit}`;
+  }
+  return value;
+}
+
+/**
+ * 解析原有style属性为对象（如"color: red" → {color: 'red'}）
+ * @param {string} styleStr - 原有style字符串
+ * @returns {object} 解析后的样式对象
+ */
+function parseStyle(styleStr) {
+  const styleObj = {};
+  if (!styleStr) return styleObj;
+  const styleParts = styleStr.split(';').map(part => part.trim()).filter(Boolean);
+  styleParts.forEach(part => {
+    const [key, value] = part.split(':').map(item => item.trim());
+    if (key && value) styleObj[key] = value;
+  });
+  return styleObj;
+}
+
+/**
+ * 将样式对象转换为style字符串（如{color: 'red'} → "color: red;"）
+ * @param {object} styleObj - 样式对象
+ * @returns {string} style字符串
+ */
+function stringifyStyle(styleObj) {
+  return Object.entries(styleObj)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join('; ') + ';';
+}
+
+/**
+ * 处理size属性（特殊逻辑：支持1-7、±1-4及超范围值）
+ * @param {string} sizeValue - size属性值
+ * @returns {string} 转换后的font-size值
+ */
+function handleSizeAttr(sizeValue) {
+  const baseMap = {
+    // 标准size映射
+    '1': 'xx-small', '2': 'x-small', '3': 'medium', '4': 'large',
+    '5': 'x-large', '6': 'xx-large', '7': 'xxx-large',
+    '-2': 'xx-small', '-1': 'x-small', '0': 'medium',
+    '+1': 'large', '+2': 'x-large', '+3': 'xx-large', '+4': 'xxx-large'
+  };
+  const trimmed = sizeValue.trim().replace(/\s+/, '');
+  if (baseMap.hasOwnProperty(trimmed)) {
+    return baseMap[trimmed];
+  }
+  // 超范围数字处理（加px单位）
+  const num = parseFloat(trimmed);
+  if (!isNaN(num)) {
+    return `${Math.max(Math.abs(num), 1)}px`; // 避免0或负数
+  }
+  return 'medium'; // 非数字默认
+}
+
+/**
+ * 处理单个标签，替换所有过期属性为style
+ * @param {CheerioElement} tag - 标签对象
+ * @param {Cheerio} $ - cheerio实例
+ */
+function processTag(tag, $) {
+  const $tag = $(tag);
+  const styleObj = {};
+  const attrsToRemove = [];
+
+  // 1. 处理ATTR_MAPPING中的属性
+  Object.keys(ATTR_MAPPING).forEach(attr => {
+    if ($tag.attr(attr) !== undefined) {
+      const [cssProp, unit] = ATTR_MAPPING[attr];
+      const originalValue = $tag.attr(attr);
+      const styledValue = addUnit(originalValue, unit);
+      styleObj[cssProp] = styledValue;
+      attrsToRemove.push(attr);
+    }
+  });
+
+  // 2. 单独处理size属性（特殊逻辑）
+  if ($tag.attr('size') !== undefined) {
+    const sizeValue = $tag.attr('size');
+    styleObj['font-size'] = handleSizeAttr(sizeValue);
+    attrsToRemove.push('size');
+  }
+
+  // 3. 合并原有style属性（不覆盖新样式）
+  const existingStyle = $tag.attr('style') || '';
+  const existingStyleObj = parseStyle(existingStyle);
+  Object.keys(existingStyleObj).forEach(key => {
+    if (!styleObj[key]) styleObj[key] = existingStyleObj[key];
+  });
+
+  // 4. 更新标签的style属性
+  if (Object.keys(styleObj).length > 0) {
+    $tag.attr('style', stringifyStyle(styleObj));
+  }
+
+  // 5. 删除原有的过期属性
+  attrsToRemove.forEach(attr => $tag.removeAttr(attr));
+}
+
+/**
+ * 处理单个文件
+ * @param {string} inputPath - 输入文件路径
+ * @param {string} outputPath - 输出文件路径
+ */
+async function processFile(inputPath, outputPath) {
+  try {
+    const content = await fs.readFile(inputPath, 'utf8');
+    const $ = cheerio.load(content, {
+      decodeEntities: false, // 保留特殊字符（如&nbsp;）
+      xmlMode: false
+    });
+
+    // 遍历所有标签并处理
+    $('*').each((i, tag) => processTag(tag, $));
+
+    await fs.ensureDir(path.dirname(outputPath));
+    await fs.writeFile(outputPath, $.html(), 'utf8');
+    console.log(`处理完成：${inputPath} → ${outputPath}`);
+  } catch (err) {
+    console.error(`处理失败 ${inputPath}：${err.message}`);
+  }
+}
+
+/**
+ * 批量处理目录下的所有文件（保留目录结构）
+ */
+async function batchProcess() {
+  try {
+    const walk = async (dir) => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (FILE_EXTENSIONS.includes(ext)) {
+            const relativePath = path.relative(INPUT_DIR, fullPath);
+            const outputPath = path.join(OUTPUT_DIR, relativePath);
+            await processFile(fullPath, outputPath);
+          }
+        }
+      }
+    };
+
+    await walk(INPUT_DIR);
+    console.log('所有文件处理完毕！');
+  } catch (err) {
+    console.error(`批量处理失败：${err.message}`);
+  }
+}
+
+// 启动处理
+batchProcess();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const ATTR_MAPPING = {
   // 布局与尺寸
   width: ['width', 'px'],
