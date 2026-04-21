@@ -1,4 +1,35 @@
 {
+    // 开启保存自动修复（核心）
+    "editor.codeActionsOnSave": {
+        "source.fixAll.htmlCodeCleaner": true
+    },
+
+    // ========== HTML Code Cleaner 专属配置 ==========
+    // 开启：转换废弃属性 → 内联style（align/width/height等）
+    "htmlCodeCleaner.convertDeprecatedAttributesToStyle": true,
+    // 转换后删除原来的旧属性（必须开）
+    "htmlCodeCleaner.removeOriginalDeprecatedAttrs": true,
+    // 自动补px单位（width/height数值自动加px）
+    "htmlCodeCleaner.autoAddPixelUnit": true,
+
+    // 关闭所有多余清理，**只改废弃属性，不动class/id/其他代码**
+    "htmlCodeCleaner.removeEmptyTags": false,
+    "htmlCodeCleaner.removeHtmlComments": false,
+    "htmlCodeCleaner.minifyCode": false,
+    "htmlCodeCleaner.formatHtml": false,
+    "htmlCodeCleaner.removeUnnecessarySpaces": false
+}
+
+
+
+
+
+
+
+
+
+
+{
   "extends": ["html-validate:recommended"],
   "rules": {
     // 开启：检测所有废弃HTML属性（align/width/height/bgcolor等）
