@@ -1,3 +1,48 @@
+const ATTR_MAPPING = {
+  // 布局与尺寸
+  width: ['width', 'px'],
+  height: ['height', 'px'],
+  vspace: ['margin-top', 'px'], // 垂直间距 → 上下外边距
+  hspace: ['margin-left', 'px'], // 水平间距 → 左右外边距
+  cellspacing: ['border-spacing', 'px'], // 表格单元格间距
+  cellpadding: ['padding', 'px'], // 表格单元格内边距
+
+  // 边框与背景
+  border: ['border', 'px solid'], // 边框（宽度+样式）
+  bordercolor: ['border-color', ''], // 边框颜色
+  bgcolor: ['background-color', ''], // 背景色
+  background: ['background', ''], // 背景图（保留原始值，如url(...)）
+
+  // 文本对齐与样式
+  align: ['text-align', ''], // 水平对齐（left/center/right）
+  valign: ['vertical-align', ''], // 垂直对齐（top/middle/bottom）
+  nowrap: ['white-space', 'nowrap'], // 不换行
+  color: ['color', ''], // 文本颜色
+  face: ['font-family', ''], // 字体（如"Arial, sans-serif"）
+  size: ['font-size', 'px'], // 字体大小（数字自动补px）
+
+  // 表格与单元格
+  colspan: ['grid-column', 'span '], // colspan="2" → grid-column: span 2
+  rowspan: ['grid-row', 'span '], // rowspan="2" → grid-row: span 2
+  bordercolordark: ['border-left-color', ''], // 表格暗边框（简化映射）
+  bordercolorlight: ['border-right-color', ''], // 表格亮边框（简化映射）
+
+  // 其他常见属性
+  clear: ['clear', ''], // 清除浮动（left/right/both）
+  float: ['float', ''], // 浮动（left/right/none）
+  dir: ['direction', ''], // 文本方向（ltr/rtl）
+  lang: ['lang', ''] // 语言属性（直接保留，非样式）
+};
+
+
+
+
+
+
+
+
+
+
 const cheerio = require('cheerio');
 const fs = require('fs-extra');
 const path = require('path');
