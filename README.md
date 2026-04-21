@@ -1,3 +1,188 @@
+const cheerio = require('cheerio');
+const fs = require('fs-extra');
+const path = require('path');
+
+// -------------------------- 配置参数 --------------------------
+const INPUT_DIR = './old_html_files';   // 待处理文件目录
+const OUTPUT_DIR = './new_html_files';  // 输出目录
+const FILE_EXTENSIONS = ['.html', '.aspx'];  // 处理的文件后缀
+// 过期属性映射规则：{原属性: [CSS属性, 默认单位]}
+const ATTR_MAPPING = {
+  align: ['text-align', ''],         // text-align无需单位
+  bgcolor: ['background-color', ''], // 颜色值无需单位
+  border: ['border', 'px solid'],    // border需要单位+样式
+  cellspacing: ['border-spacing', 'px'],
+  cellpadding: ['padding', 'px'],
+  width: ['width', 'px'],
+  height: ['height', 'px']
+};
+// --------------------------------------------------------------
+
+/**
+ * 为纯数字值添加单位（如100 → 100px，已带单位则不变）
+ * @param {string} value - 属性值
+ * @param {string} unit - 默认单位（如px）
+ * @returns {string} 带单位的属性值
+ */
+function addUnit(value, unit) {
+  if (!unit) return value; // 无需单位的属性直接返回
+  // 匹配纯数字（整数/小数）
+  const numRegex = /^\d+(\.\d+)?$/;
+  if (numRegex.test(value.trim())) {
+    return `${value}${unit}`;
+  }
+  return value; // 已带单位或非数字，直接返回
+}
+
+/**
+ * 解析原有style属性为对象（如"color: red; width: 100" → {color: 'red', width: '100'}）
+ * @param {string} styleStr - 原有style字符串
+ * @returns {object} 解析后的样式对象
+ */
+function parseStyle(styleStr) {
+  const styleObj = {};
+  if (!styleStr) return styleObj;
+  // 按分号分割样式，过滤空值
+  const styleParts = styleStr.split(';').map(part => part.trim()).filter(Boolean);
+  styleParts.forEach(part => {
+    const [key, value] = part.split(':').map(item => item.trim());
+    if (key && value) {
+      styleObj[key] = value;
+    }
+  });
+  return styleObj;
+}
+
+/**
+ * 将样式对象转换为style字符串（如{color: 'red'} → "color: red;"）
+ * @param {object} styleObj - 样式对象
+ * @returns {string} style字符串
+ */
+function stringifyStyle(styleObj) {
+  return Object.entries(styleObj)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join('; ') + ';';
+}
+
+/**
+ * 处理单个标签，替换过期属性为style
+ * @param {CheerioElement} tag - 标签对象
+ * @param {Cheerio} $ - cheerio实例
+ */
+function processTag(tag, $) {
+  const $tag = $(tag);
+  const styleObj = {};
+  const attrsToRemove = [];
+
+  // 处理过期属性，转换为style
+  Object.keys(ATTR_MAPPING).forEach(attr => {
+    if ($tag.attr(attr) !== undefined) {
+      const [cssProp, unit] = ATTR_MAPPING[attr];
+      const originalValue = $tag.attr(attr);
+      const styledValue = addUnit(originalValue, unit);
+      styleObj[cssProp] = styledValue; // 新样式覆盖旧样式
+      attrsToRemove.push(attr); // 标记需要删除的原属性
+    }
+  });
+
+  // 合并原有style属性
+  const existingStyle = $tag.attr('style') || '';
+  const existingStyleObj = parseStyle(existingStyle);
+  // 原有样式中未被新样式覆盖的部分保留
+  Object.keys(existingStyleObj).forEach(key => {
+    if (!styleObj[key]) {
+      styleObj[key] = existingStyleObj[key];
+    }
+  });
+
+  // 更新标签的style属性
+  if (Object.keys(styleObj).length > 0) {
+    $tag.attr('style', stringifyStyle(styleObj));
+  }
+
+  // 删除原有的过期属性
+  attrsToRemove.forEach(attr => {
+    $tag.removeAttr(attr);
+  });
+}
+
+/**
+ * 处理单个文件
+ * @param {string} inputPath - 输入文件路径
+ * @param {string} outputPath - 输出文件路径
+ */
+async function processFile(inputPath, outputPath) {
+  try {
+    // 读取文件内容（UTF-8编码）
+    const content = await fs.readFile(inputPath, 'utf8');
+    // 解析HTML
+    const $ = cheerio.load(content, {
+      decodeEntities: false, // 保留原始字符（如&nbps;）
+      xmlMode: false // 按HTML模式解析
+    });
+
+    // 遍历所有标签并处理
+    $('*').each((i, tag) => {
+      processTag(tag, $);
+    });
+
+    // 确保输出目录存在
+    await fs.ensureDir(path.dirname(outputPath));
+    // 保存处理后的内容
+    await fs.writeFile(outputPath, $.html(), 'utf8');
+
+    console.log(`处理完成：${inputPath} → ${outputPath}`);
+  } catch (err) {
+    console.error(`处理失败 ${inputPath}：${err.message}`);
+  }
+}
+
+/**
+ * 批量处理目录下的所有文件
+ */
+async function batchProcess() {
+  try {
+    // 遍历输入目录
+    const walk = async (dir) => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(fullPath); // 递归处理子目录
+        } else if (entry.isFile()) {
+          // 只处理指定后缀的文件
+          const ext = path.extname(entry.name).toLowerCase();
+          if (FILE_EXTENSIONS.includes(ext)) {
+            // 计算输出路径（保持目录结构）
+            const relativePath = path.relative(INPUT_DIR, fullPath);
+            const outputPath = path.join(OUTPUT_DIR, relativePath);
+            await processFile(fullPath, outputPath);
+          }
+        }
+      }
+    };
+
+    await walk(INPUT_DIR);
+    console.log('所有文件处理完毕！');
+  } catch (err) {
+    console.error(`批量处理失败：${err.message}`);
+  }
+}
+
+// 启动处理
+batchProcess();
+
+
+
+
+
+
+
+
+
+
+
+
 {
     // 开启保存自动修复（核心）
     "editor.codeActionsOnSave": {
