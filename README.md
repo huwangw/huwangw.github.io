@@ -1,3 +1,26 @@
+{
+  "extends": ["html-validate:recommended"],
+  "rules": {
+    // 开启：检测所有废弃HTML属性（align/width/height/bgcolor等）
+    "no-deprecated-attr": "error",
+    // 开启自动修复能力
+    "no-deprecated-attr/fixable": true,
+    // 关闭其他你不需要的冗余规则，避免干扰
+    "doctype-html": "off",
+    "no-unused-id": "off",
+    "attribute-allowed-values": "warn"
+  }
+}
+
+
+
+
+
+
+
+
+
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
