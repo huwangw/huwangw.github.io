@@ -1,3 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C#到Java实体类转换工具</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Consolas', 'Microsoft YaHei', sans-serif;
+        }
+        body {
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+        .panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        label {
+            font-weight: bold;
+            color: #333;
+        }
+        textarea, pre {
+            width: 100%;
+            min-height: 400px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+            line-height: 1.5;
+            overflow: auto;
+        }
+        pre {
+            background-color: #f8f8f8;
+            color: #333;
+        }
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #convert {
+            background-color: #4CAF50;
+            color: white;
+        }
+        #clear {
+            background-color: #f44336;
+            color: white;
+        }
+        #copy {
+            background-color: #2196F3;
+            color: white;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f0f7ff;
+            border: 1px solid #cce0ff;
+            border-radius: 4px;
+            color: #336699;
+            font-size: 14px;
+        }
+        .info h3 {
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        .info ul {
+            margin-left: 20px;
+        }
+        .info li {
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>C#实体类转Java类工具</h1>
+    <div class="container">
+        <div class="panel">
+            <label for="csharp-input">C# 代码 (class/interface)</label>
+            <textarea id="csharp-input" placeholder="请输入C#的class或interface代码...">// 示例类
+public class User
+{
+    #region 基本信息
+    /// <summary>
+    /// 用户ID
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// 用户名
+    /// </summary>
+    public string Name { get; set; }
+    #endregion
+
+    // 年龄
+    public int Age { get; private set; }
+
+    /// <summary>
+    /// 注册时间
+    /// </summary>
+    public DateTime RegisterTime { get; set; }
+}
+
+// 示例接口
+public interface IUserService
+{
+    // 获取用户信息
+    User GetUser(int id);
+}</textarea>
+            <div class="buttons">
+                <button id="convert">转换</button>
+                <button id="clear">清空输入</button>
+            </div>
+        </div>
+        <div class="panel">
+            <label for="java-output">Java 代码 (带注释)</label>
+            <pre id="java-output"></pre>
+            <div class="buttons">
+                <button id="copy">复制结果</button>
+            </div>
+        </div>
+    </div>
+    <div class="info">
+        <h3>转换说明</h3>
+        <ul>
+            <li>自动移除C#特有语法：#region、#endregion、public/private等修饰符的冗余定义</li>
+            <li>注释转换：/// 文档注释转为Java的/** ... */，单行//注释保持不变</li>
+            <li>类型映射：int→int、string→String、DateTime→LocalDateTime等</li>
+            <li>属性转换：C#属性自动转为Java私有字段，符合Java规范</li>
+            <li>不依赖任何外部库，纯原生HTML+JS实现</li>
+        </ul>
+    </div>
+
+    <script>
+        // C#类型到Java类型的映射表
+        const typeMap = {
+            'int': 'int',
+            'string': 'String',
+            'bool': 'boolean',
+            'long': 'long',
+            'float': 'float',
+            'double': 'double',
+            'decimal': 'BigDecimal',
+            'DateTime': 'LocalDateTime',
+            'DateTimeOffset': 'OffsetDateTime',
+            'Guid': 'UUID',
+            'byte': 'byte',
+            'char': 'char',
+            'short': 'short',
+            'object': 'Object',
+            'void': 'void'
+        };
+
+        // 转换C#代码到Java代码
+        function convertCSharpToJava(csharpCode) {
+            // 1. 预处理：移除#region和#endregion
+            let lines = csharpCode.split('\n')
+                .map(line => line.trim())
+                .filter(line => 
+                    !line.startsWith('#region') && 
+                    !line.startsWith('#endregion')
+                );
+
+            // 2. 判断是class还是interface
+            let isInterface = false;
+            let isClass = false;
+            let className = '';
+            for (let line of lines) {
+                if (line.includes('interface')) {
+                    isInterface = true;
+                    const match = line.match(/interface\s+(\w+)/);
+                    if (match) className = match[1];
+                    break;
+                } else if (line.includes('class')) {
+                    isClass = true;
+                    const match = line.match(/class\s+(\w+)/);
+                    if (match) className = match[1];
+                    break;
+                }
+            }
+
+            if (!isInterface && !isClass) {
+                return '请输入有效的class或interface代码';
+            }
+
+            // 3. 处理注释和成员
+            const javaLines = [];
+            // 添加必要的导入
+            const imports = new Set();
+            lines.forEach(line => {
+                if (line.includes('DateTime')) imports.add('import java.time.LocalDateTime;');
+                if (line.includes('DateTimeOffset')) imports.add('import java.time.OffsetDateTime;');
+                if (line.includes('Guid')) imports.add('import java.util.UUID;');
+                if (line.includes('decimal')) imports.add('import java.math.BigDecimal;');
+            });
+            // 导入语句加入结果
+            if (imports.size > 0) {
+                javaLines.push(...imports);
+                javaLines.push(''); // 空行分隔
+            }
+
+            // 4. 类/接口定义
+            if (isClass) {
+                javaLines.push(`public class ${className} {`);
+            } else {
+                javaLines.push(`public interface ${className} {`);
+            }
+
+            // 5. 处理成员和注释
+            let inDocComment = false; // 是否在///注释块中
+            lines.forEach(line => {
+                // 跳过定义行（已处理）
+                if (line.includes('class') || line.includes('interface') || line.trim() === '') {
+                    return;
+                }
+
+                // 处理文档注释（/// → /** */）
+                if (line.startsWith('///')) {
+                    if (!inDocComment) {
+                        javaLines.push('    /**');
+                        inDocComment = true;
+                    }
+                    // 移除///并保留内容
+                    javaLines.push(`    * ${line.replace('///', '').trim()}`);
+                    return;
+                } else if (inDocComment) {
+                    javaLines.push('    */');
+                    inDocComment = false;
+                }
+
+                // 处理单行注释（保持//）
+                if (line.startsWith('//')) {
+                    javaLines.push(`    ${line}`);
+                    return;
+                }
+
+                // 处理属性（如public int Id { get; set; }）
+                const propMatch = line.match(/(public|private|internal)?\s*(\w+)\s+(\w+)\s*\{.*\}/);
+                if (propMatch && isClass) {
+                    const [, , csharpType, propName] = propMatch;
+                    const javaType = typeMap[csharpType] || csharpType;
+                    // 转换为私有字段（符合Java规范）
+                    javaLines.push(`    private ${javaType} ${toCamelCase(propName)};`);
+                    return;
+                }
+
+                // 处理接口方法（如User GetUser(int id);）
+                const methodMatch = line.match(/(\w+)\s+(\w+)\s*\((.*?)\)\s*\{?/);
+                if (methodMatch && isInterface) {
+                    const [, returnType, methodName, paramsStr] = methodMatch;
+                    const javaReturnType = typeMap[returnType] || returnType;
+                    // 处理参数
+                    let javaParams = '';
+                    if (paramsStr) {
+                        javaParams = paramsStr.split(',').map(param => {
+                            const [pType, pName] = param.trim().split(/\s+/);
+                            const javaPType = typeMap[pType] || pType;
+                            return `${javaPType} ${toCamelCase(pName)}`;
+                        }).join(', ');
+                    }
+                    javaLines.push(`    ${javaReturnType} ${methodName}(${javaParams});`);
+                    return;
+                }
+            });
+
+            // 关闭可能未关闭的文档注释
+            if (inDocComment) {
+                javaLines.push('    */');
+            }
+
+            // 闭合类/接口
+            javaLines.push('}');
+
+            return javaLines.join('\n');
+        }
+
+        // 转换为驼峰命名（首字母小写）
+        function toCamelCase(name) {
+            if (!name) return name;
+            return name.charAt(0).toLowerCase() + name.slice(1);
+        }
+
+        // 事件绑定
+        document.getElementById('convert').addEventListener('click', () => {
+            const input = document.getElementById('csharp-input').value;
+            const result = convertCSharpToJava(input);
+            document.getElementById('java-output').textContent = result;
+        });
+
+        document.getElementById('clear').addEventListener('click', () => {
+            document.getElementById('csharp-input').value = '';
+        });
+
+        document.getElementById('copy').addEventListener('click', () => {
+            const output = document.getElementById('java-output').textContent;
+            if (output) {
+                navigator.clipboard.writeText(output).then(() => {
+                    alert('复制成功！');
+                }).catch(() => {
+                    alert('复制失败，请手动复制');
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
 
 const cheerio = require('cheerio');
 const fs = require('fs-extra');
