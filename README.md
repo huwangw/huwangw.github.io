@@ -2,6 +2,102 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <title>C#转Java实体类工具</title>
+    <style>
+        /* 样式省略，与之前保持一致 */
+        .container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px; }
+        textarea, pre { width: 100%; min-height: 300px; padding: 10px; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div>
+            <h3>C#代码（可省略public）</h3>
+            <textarea id="csharpInput">// 省略public的属性示例
+class Product
+{
+    // 省略访问修饰符，默认public
+    int Id { get; set; }
+    
+    // 显式private（转换时仍转为Java的private字段）
+    private string Name { get; set; }
+    
+    DateTime CreateTime { get; set; }
+}</textarea>
+            <button onclick="convert()">转换</button>
+        </div>
+        <div>
+            <h3>Java实体类</h3>
+            <pre id="javaOutput"></pre>
+        </div>
+    </div>
+
+    <script>
+        const typeMap = {
+            'int': 'int',
+            'string': 'String',
+            'DateTime': 'LocalDateTime'
+            // 其他类型映射省略
+        };
+
+        function convert() {
+            const csharpCode = document.getElementById('csharpInput').value;
+            const lines = csharpCode.split('\n').map(line => line.trim());
+            
+            // 提取类名
+            let className = '';
+            lines.forEach(line => {
+                if (line.startsWith('class ')) {
+                    className = line.split(' ')[1].split('{')[0];
+                }
+            });
+
+            // 解析属性
+            const javaLines = ['import lombok.Data;', ''];
+            if (lines.some(line => line.includes('DateTime'))) {
+                javaLines.unshift('import java.time.LocalDateTime;');
+            }
+            javaLines.push('@Data');
+            javaLines.push(`public class ${className} {`);
+
+            lines.forEach(line => {
+                // 匹配属性（忽略修饰符）
+                const propMatch = line.match(/(?:public|private|protected|internal)?\s*(\w+)\s+(\w+)\s*\{.*\}/);
+                if (propMatch) {
+                    const [, csharpType, propName] = propMatch;
+                    const javaType = typeMap[csharpType] || csharpType;
+                    const javaField = `    private ${javaType} ${toCamelCase(propName)};`;
+                    javaLines.push(javaField);
+                }
+            });
+
+            javaLines.push('}');
+            document.getElementById('javaOutput').textContent = javaLines.join('\n');
+        }
+
+        function toCamelCase(name) {
+            return name.charAt(0).toLowerCase() + name.slice(1);
+        }
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>C#到Java实体类转换工具</title>
     <style>
